@@ -48,7 +48,7 @@ export class BybitService {
       const sortedCoins = response.result.list
         .sort((a, b) => parseFloat(b.volume24h) - parseFloat(a.volume24h))
         .slice(0, topCount)
-        .map((coin) => coin.symbol);
+        .map((coin) => `${coin.symbol}T`);
 
       console.log(`Топ ${topCount} монет по объему:`, sortedCoins);
       await this.telegramService.sendNotification(

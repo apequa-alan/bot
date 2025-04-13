@@ -115,7 +115,7 @@ export class TradingBotService implements OnModuleInit {
           prevHistogramAbs: 0,
         });
 
-        const wsKlineTopicEvent = `kline.${this.INTERVAL}.${symbol}T`;
+        const wsKlineTopicEvent = `kline.${this.INTERVAL}.${symbol}`;
         this.ws.subscribeV5(wsKlineTopicEvent, 'linear');
         console.log(`Начато отслеживание ${symbol}`);
       }
