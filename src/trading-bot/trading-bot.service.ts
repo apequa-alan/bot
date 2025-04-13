@@ -11,15 +11,11 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 
 @Injectable()
 export class TradingBotService implements OnModuleInit {
-  // Клиенты и переменные
   private ws: WebsocketClient;
   private symbolData: Map<string, SymbolData> = new Map();
   private readonly TOP_VOLUME_COINS_COUNT = 10;
-
-  // Константы для анализа MACD
   private readonly ONE_HISTOGRAM_DIRECTION_CANDLES = 5;
 
-  // Конфигурационные переменные
   private readonly BYBIT_API_KEY: string;
   private readonly BYBIT_API_SECRET: string;
   private readonly INTERVAL: KlineIntervalV3;
@@ -28,12 +24,27 @@ export class TradingBotService implements OnModuleInit {
   private readonly SIGNAL_PERIOD: string;
   private readonly VOLUME_SMA_SMOOTHING_PERIOD: string;
 
+  private readonly HIGHER_TIMEFRAME_MAP: Partial<
+    Record<KlineIntervalV3, KlineIntervalV3>
+  > = {
+    '1': '5',
+    '3': '15',
+    '5': '15',
+    '15': '60',
+    '30': '120',
+    '60': '240',
+    '120': '240',
+    '240': 'D',
+    '360': 'D',
+    D: 'W',
+    W: 'M',
+  };
+
   constructor(
     private readonly configService: ConfigService,
     private readonly telegramService: TelegramService,
     private readonly bybitService: BybitService,
   ) {
-    // Инициализация конфигурационных переменных
     this.BYBIT_API_KEY = this.configService.get<string>('BYBIT_API_KEY') ?? '';
     this.BYBIT_API_SECRET =
       this.configService.get<string>('BYBIT_API_SECRET') ?? '';
@@ -57,7 +68,6 @@ export class TradingBotService implements OnModuleInit {
       secret: this.BYBIT_API_SECRET,
     });
 
-    // Запуск бота
     await this.startBot();
   }
 
@@ -74,10 +84,8 @@ export class TradingBotService implements OnModuleInit {
         return;
       }
 
-      // Получаем текущие отслеживаемые монеты
       const currentCoins = Array.from(this.symbolData.keys());
 
-      // Определяем монеты, которые нужно добавить и удалить
       const coinsToAdd = newTopCoins.filter(
         (coin) => !currentCoins.includes(coin),
       );
@@ -85,7 +93,6 @@ export class TradingBotService implements OnModuleInit {
         (coin) => !newTopCoins.includes(coin),
       );
 
-      // Отписываемся от монет, которые больше не в топе
       for (const symbol of coinsToRemove) {
         const wsKlineTopicEvent = `kline.${this.INTERVAL}.${symbol}`;
         this.ws.unsubscribeV5(wsKlineTopicEvent, 'linear');
@@ -93,7 +100,6 @@ export class TradingBotService implements OnModuleInit {
         console.log(`Прекращено отслеживание ${symbol}`);
       }
 
-      // Подписываемся на новые монеты и инициализируем их данные
       for (const symbol of coinsToAdd) {
         const { candles, smoothedSMA } =
           await this.bybitService.fetchCandlesWithoutLast(
@@ -288,7 +294,7 @@ export class TradingBotService implements OnModuleInit {
       );
       return;
     }
-    // Проверяем ослабление сигнала: если абсолютное значение MACD не снизилось
+
     if (currentHistogramAbs >= symbolData.prevHistogramAbs) {
       console.log(
         `${symbol}: [handleMacdSignal] Абсолютное значение MACD не снизилось.`,
@@ -297,31 +303,73 @@ export class TradingBotService implements OnModuleInit {
       return;
     }
 
-    // Отправляем уведомление в Telegram о возможности открытия позиции
     if (canOpenPositionByVolume) {
-      const currentPrice =
-        symbolData.candles[symbolData.candles.length - 1].closePrice;
-      const currentTime =
-        symbolData.candles[symbolData.candles.length - 1].startTime;
-
-      // Отправляем сигнал на открытие позиции против направления MACD
-      if (currentSign < 0) {
-        await this.telegramService.sendNotification(
-          'info',
-          `${symbol} 📈 Сигнал на открытие лонга\n` +
-            `Цена: ${currentPrice}\n` +
-            `Время: ${currentTime}\n` +
-            `MACD: ${histogramValue.toFixed(6)}\n` +
-            `Тип: Против тренда`,
+      const higherInterval = this.HIGHER_TIMEFRAME_MAP[this.INTERVAL];
+      if (!higherInterval) {
+        console.log(
+          `${symbol}: No higher timeframe mapping available for interval ${this.INTERVAL}`,
         );
-      } else if (currentSign > 0) {
-        await this.telegramService.sendNotification(
-          'info',
-          `${symbol} 📉 Сигнал на открытие шорта\n` +
-            `Цена: ${currentPrice}\n` +
-            `Время: ${currentTime}\n` +
-            `MACD: ${histogramValue.toFixed(6)}\n` +
-            `Тип: Против тренда`,
+        return;
+      }
+
+      const { candles: higherTimeframeCandles } =
+        await this.bybitService.fetchCandlesWithoutLast(
+          symbol,
+          higherInterval,
+          300,
+        );
+
+      if (!higherTimeframeCandles || higherTimeframeCandles.length === 0) {
+        console.log(`${symbol}: No higher timeframe data available`);
+        return;
+      }
+
+      const higherTimeframeMACD = calculateMACD(
+        higherTimeframeCandles.map((item) => parseFloat(item.closePrice)),
+        Number(this.FAST_PERIOD),
+        Number(this.SLOW_PERIOD),
+        Number(this.SIGNAL_PERIOD),
+      );
+
+      if (higherTimeframeMACD.histogram.length === 0) {
+        console.log(`${symbol}: No MACD data available for higher timeframe`);
+        return;
+      }
+
+      const higherTimeframeHistogram =
+        higherTimeframeMACD.histogram[higherTimeframeMACD.histogram.length - 1];
+      const higherTimeframeSign = Math.sign(higherTimeframeHistogram);
+
+      if (currentSign === higherTimeframeSign) {
+        const currentPrice =
+          symbolData.candles[symbolData.candles.length - 1].closePrice;
+        const currentTime =
+          symbolData.candles[symbolData.candles.length - 1].startTime;
+
+        if (currentSign < 0) {
+          await this.telegramService.sendNotification(
+            'info',
+            `${symbol} 📈 Сигнал на открытие лонга\n` +
+              `Цена: ${currentPrice}\n` +
+              `Время: ${currentTime}\n` +
+              `MACD: ${histogramValue.toFixed(6)}\n` +
+              `MACD (${higherInterval}m): ${higherTimeframeHistogram.toFixed(6)}\n` +
+              `Тип: Против тренда`,
+          );
+        } else if (currentSign > 0) {
+          await this.telegramService.sendNotification(
+            'info',
+            `${symbol} 📉 Сигнал на открытие шорта\n` +
+              `Цена: ${currentPrice}\n` +
+              `Время: ${currentTime}\n` +
+              `MACD: ${histogramValue.toFixed(6)}\n` +
+              `MACD (${higherInterval}m): ${higherTimeframeHistogram.toFixed(6)}\n` +
+              `Тип: Против тренда`,
+          );
+        }
+      } else {
+        console.log(
+          `${symbol}: [handleMacdSignal] Направления MACD на разных таймфреймах не совпадают.`,
         );
       }
     }
