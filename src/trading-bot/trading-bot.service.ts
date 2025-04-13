@@ -115,7 +115,7 @@ export class TradingBotService implements OnModuleInit {
           prevHistogramAbs: 0,
         });
 
-        const wsKlineTopicEvent = `kline.${this.INTERVAL}.${symbol}`;
+        const wsKlineTopicEvent = `kline.${this.INTERVAL}.${symbol}T`;
         this.ws.subscribeV5(wsKlineTopicEvent, 'linear');
         console.log(`Начато отслеживание ${symbol}`);
       }
@@ -338,15 +338,24 @@ export class TradingBotService implements OnModuleInit {
 
       const higherTimeframeHistogram =
         higherTimeframeMACD.histogram[higherTimeframeMACD.histogram.length - 1];
-      const higherTimeframeSign = Math.sign(higherTimeframeHistogram);
+      const higherTimeframePrevHistogram =
+        higherTimeframeMACD.histogram[higherTimeframeMACD.histogram.length - 2];
+      const higherTimeframeStartedToDown =
+        Math.abs(higherTimeframeHistogram) <
+        Math.abs(higherTimeframePrevHistogram);
 
-      if (currentSign === higherTimeframeSign) {
+      // For short position: small timeframe MACD > 0 and higher timeframe MACD < 0
+      // For long position: small timeframe MACD < 0 and higher timeframe MACD > 0
+      const isShortSignal = currentSign > 0 && higherTimeframeHistogram < 0;
+      const isLongSignal = currentSign < 0 && higherTimeframeHistogram > 0;
+
+      if (isShortSignal || isLongSignal || higherTimeframeStartedToDown) {
         const currentPrice =
           symbolData.candles[symbolData.candles.length - 1].closePrice;
         const currentTime =
           symbolData.candles[symbolData.candles.length - 1].startTime;
 
-        if (currentSign < 0) {
+        if (isLongSignal) {
           await this.telegramService.sendNotification(
             'info',
             `${symbol} 📈 Сигнал на открытие лонга\n` +
@@ -354,9 +363,10 @@ export class TradingBotService implements OnModuleInit {
               `Время: ${currentTime}\n` +
               `MACD: ${histogramValue.toFixed(6)}\n` +
               `MACD (${higherInterval}m): ${higherTimeframeHistogram.toFixed(6)}\n` +
-              `Тип: Против тренда`,
+              `MACD (${higherInterval}m) prev: ${higherTimeframePrevHistogram.toFixed(6)}\n` +
+              `Тип: ${higherTimeframeStartedToDown ? 'Начало разворота' : 'Против тренда'}`,
           );
-        } else if (currentSign > 0) {
+        } else if (isShortSignal) {
           await this.telegramService.sendNotification(
             'info',
             `${symbol} 📉 Сигнал на открытие шорта\n` +
@@ -364,12 +374,13 @@ export class TradingBotService implements OnModuleInit {
               `Время: ${currentTime}\n` +
               `MACD: ${histogramValue.toFixed(6)}\n` +
               `MACD (${higherInterval}m): ${higherTimeframeHistogram.toFixed(6)}\n` +
-              `Тип: Против тренда`,
+              `MACD (${higherInterval}m) prev: ${higherTimeframePrevHistogram.toFixed(6)}\n` +
+              `Тип: ${higherTimeframeStartedToDown ? 'Начало разворота' : 'Против тренда'}`,
           );
         }
       } else {
         console.log(
-          `${symbol}: [handleMacdSignal] Направления MACD на разных таймфреймах не совпадают.`,
+          `${symbol}: [handleMacdSignal] Нет сигнала для открытия позиции. MACD малого таймфрейма: ${currentSign}, MACD большого таймфрейма: ${higherTimeframeHistogram.toFixed(6)}`,
         );
       }
     }

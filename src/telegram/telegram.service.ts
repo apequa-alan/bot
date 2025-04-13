@@ -36,7 +36,6 @@ export class TelegramService implements OnModuleInit {
         prefix = '🟢 ';
         break;
     }
-    await this.bot.telegram.deleteMyCommands();
 
     try {
       await this.bot.telegram.sendMessage(this.channelId, prefix + message);
