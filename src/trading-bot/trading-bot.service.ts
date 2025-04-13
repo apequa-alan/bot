@@ -1,21 +1,20 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as dayjs from 'dayjs';
-import { WebsocketClient, RestClientV5, KlineIntervalV3 } from 'bybit-api';
+import { WebsocketClient, KlineIntervalV3 } from 'bybit-api';
 import { TelegramService } from '../telegram/telegram.service';
+import { BybitService } from '../bybit/bybit.service';
 import { calculateMACD } from './utils/macd.utils';
 import { calculateSmoothedSMA } from './utils/sma.utils';
-import { SymbolData, Candle } from './types';
+import { SymbolData, WsKlineV5 } from './types';
+import { Cron, CronExpression } from '@nestjs/schedule';
 
 @Injectable()
 export class TradingBotService implements OnModuleInit {
   // Клиенты и переменные
-  private restClient: RestClientV5;
   private ws: WebsocketClient;
   private symbolData: Map<string, SymbolData> = new Map();
   private readonly TOP_VOLUME_COINS_COUNT = 10;
-  private readonly VOLUME_UPDATE_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
-  private volumeUpdateTimer: NodeJS.Timeout;
 
   // Константы для анализа MACD
   private readonly ONE_HISTOGRAM_DIRECTION_CANDLES = 5;
@@ -32,6 +31,7 @@ export class TradingBotService implements OnModuleInit {
   constructor(
     private readonly configService: ConfigService,
     private readonly telegramService: TelegramService,
+    private readonly bybitService: BybitService,
   ) {
     // Инициализация конфигурационных переменных
     this.BYBIT_API_KEY = this.configService.get<string>('BYBIT_API_KEY') ?? '';
@@ -51,12 +51,6 @@ export class TradingBotService implements OnModuleInit {
   }
 
   async onModuleInit() {
-    // Инициализация клиентов Bybit
-    this.restClient = new RestClientV5({
-      key: this.BYBIT_API_KEY,
-      secret: this.BYBIT_API_SECRET,
-    });
-
     this.ws = new WebsocketClient({
       market: 'v5',
       key: this.BYBIT_API_KEY,
@@ -67,9 +61,12 @@ export class TradingBotService implements OnModuleInit {
     await this.startBot();
   }
 
+  @Cron(CronExpression.EVERY_4_HOURS)
   private async updateTopVolumeCoins() {
     try {
-      const newTopCoins = await this.getTopVolumeCoins();
+      const newTopCoins = await this.bybitService.getTopVolumeCoins(
+        this.TOP_VOLUME_COINS_COUNT,
+      );
       if (newTopCoins.length === 0) {
         console.error(
           'Не удалось получить новый список монет для отслеживания',
@@ -91,27 +88,29 @@ export class TradingBotService implements OnModuleInit {
       // Отписываемся от монет, которые больше не в топе
       for (const symbol of coinsToRemove) {
         const wsKlineTopicEvent = `kline.${this.INTERVAL}.${symbol}`;
-        await this.ws.unsubscribeV5(wsKlineTopicEvent, 'linear');
+        this.ws.unsubscribeV5(wsKlineTopicEvent, 'linear');
         this.symbolData.delete(symbol);
         console.log(`Прекращено отслеживание ${symbol}`);
       }
 
       // Подписываемся на новые монеты и инициализируем их данные
       for (const symbol of coinsToAdd) {
-        const candles = await this.fetchCandlesWithoutLast(
-          symbol,
-          this.INTERVAL,
-          300,
-        );
+        const { candles, smoothedSMA } =
+          await this.bybitService.fetchCandlesWithoutLast(
+            symbol,
+            this.INTERVAL,
+            300,
+          );
+
         this.symbolData.set(symbol, {
           symbol,
           candles,
-          smaVolumes: [],
+          smaVolumes: smoothedSMA !== null ? [smoothedSMA] : [],
           prevHistogramAbs: 0,
         });
 
         const wsKlineTopicEvent = `kline.${this.INTERVAL}.${symbol}`;
-        await this.ws.subscribeV5(wsKlineTopicEvent, 'linear');
+        this.ws.subscribeV5(wsKlineTopicEvent, 'linear');
         console.log(`Начато отслеживание ${symbol}`);
       }
 
@@ -125,111 +124,8 @@ export class TradingBotService implements OnModuleInit {
       console.error('Ошибка при обновлении списка монет', error);
       await this.telegramService.sendNotification(
         'error',
-        `Ошибка при обновлении списка монет: ${error.message}`,
+        `Ошибка при обновлении списка монет: ${error}`,
       );
-    }
-  }
-
-  private async getTopVolumeCoins(): Promise<string[]> {
-    try {
-      const response = await this.restClient.getTickers({
-        category: 'linear',
-      });
-
-      if (!response || !response.result?.list) {
-        console.error('Некорректный ответ от Bybit при получении списка монет');
-        await this.telegramService.sendNotification(
-          'error',
-          'Некорректный ответ от Bybit при получении списка монет.',
-        );
-        return [];
-      }
-
-      // Сортируем монеты по объему и берем топ-10
-      const sortedCoins = response.result.list
-        .sort((a, b) => parseFloat(b.volume24h) - parseFloat(a.volume24h))
-        .slice(0, this.TOP_VOLUME_COINS_COUNT)
-        .map((coin) => coin.symbol);
-
-      console.log(
-        `Топ ${this.TOP_VOLUME_COINS_COUNT} монет по объему:`,
-        sortedCoins,
-      );
-      await this.telegramService.sendNotification(
-        'info',
-        `Топ ${this.TOP_VOLUME_COINS_COUNT} монет по объему:\n${sortedCoins.join('\n')}`,
-      );
-
-      return sortedCoins;
-    } catch (error) {
-      console.error('Ошибка при получении списка монет', error);
-      await this.telegramService.sendNotification(
-        'error',
-        `Ошибка при получении списка монет: ${error.message}`,
-      );
-      return [];
-    }
-  }
-
-  private async fetchCandlesWithoutLast(
-    symbol: string,
-    interval: KlineIntervalV3,
-    limit: number,
-  ): Promise<any[]> {
-    try {
-      const response = await this.restClient.getKline({
-        symbol,
-        interval,
-        category: 'linear',
-        limit,
-      });
-
-      if (!response || !response.result?.list) {
-        console.error('Некорректный ответ от Bybit', response);
-        await this.telegramService.sendNotification(
-          'error',
-          `Некорректный ответ от Bybit при получении свечей для ${symbol}.`,
-        );
-        return [];
-      }
-
-      const list = response.result.list.map((candle) => ({
-        openTime: candle[0],
-        time: dayjs(Number(candle[0])).format('YY-MM-DD HH:mm'),
-        closePrice: parseFloat(candle[4]),
-        volume: parseFloat(candle[5]),
-      }));
-
-      list.sort((a, b) => Number(a.openTime) - Number(b.openTime));
-      list.pop(); // Убираем последнюю незакрытую свечу
-
-      const smoothedSMA = calculateSmoothedSMA(
-        list.map((item) => item.volume),
-        Number(this.VOLUME_SMA_SMOOTHING_PERIOD),
-      );
-
-      if (smoothedSMA !== null) {
-        const symbolData = this.symbolData.get(symbol) || {
-          symbol,
-          candles: [],
-          smaVolumes: [],
-          prevHistogramAbs: 0,
-        };
-        symbolData.smaVolumes.push(smoothedSMA);
-        this.symbolData.set(symbol, symbolData);
-      }
-
-      console.log(
-        `${symbol}: ${list.length} свечей (без последней незакрытой).`,
-      );
-      return list;
-    } catch (error) {
-      console.error(`Ошибка при запросе свечей для ${symbol}`, error);
-      await this.telegramService.sendNotification(
-        'error',
-        `Ошибка при запросе свечей для ${symbol}: ${error.message}`,
-      );
-      return [];
     }
   }
 
@@ -237,12 +133,6 @@ export class TradingBotService implements OnModuleInit {
     try {
       // Получаем начальный список монет
       await this.updateTopVolumeCoins();
-
-      // Устанавливаем таймер для обновления списка каждые 4 часа
-      this.volumeUpdateTimer = setInterval(
-        () => this.updateTopVolumeCoins(),
-        this.VOLUME_UPDATE_INTERVAL,
-      );
 
       this.ws.on('open', () => {
         console.log('WebSocket подключен к Bybit.');
@@ -257,15 +147,15 @@ export class TradingBotService implements OnModuleInit {
         this.telegramService.sendNotification('error', 'WebSocket отключился.');
       });
 
-      (this.ws as any).on('error', (err: Record<string, string>) => {
-        console.error('WebSocket ошибка:', err);
+      this.ws.on('error', ((error: any) => {
+        console.error('WebSocket ошибка:', error);
         this.telegramService.sendNotification(
           'error',
-          `WebSocket ошибка: ${err.message}`,
+          `WebSocket ошибка: ${error}`,
         );
-      });
+      }) as unknown as never);
 
-      this.ws.on('update', async (data) => {
+      this.ws.on('update', (data: { topic: string; data: WsKlineV5[] }) => {
         if (!data.topic || !data.data) return;
 
         const symbol = data.topic.split('.')[2];
@@ -286,13 +176,18 @@ export class TradingBotService implements OnModuleInit {
         );
 
         symbolData.candles.push({
-          openTime: latestKline.start,
-          time: startTime,
-          closePrice: close,
-          volume: parseFloat(latestKline.volume),
+          startTime: latestKline.start.toString(),
+          openPrice: latestKline.open,
+          highPrice: latestKline.high,
+          lowPrice: latestKline.low,
+          closePrice: latestKline.close,
+          volume: latestKline.volume,
+          turnover: latestKline.turnover,
         });
 
-        const closingPrices = symbolData.candles.map((item) => item.closePrice);
+        const closingPrices = symbolData.candles.map((item) =>
+          parseFloat(item.closePrice),
+        );
         const { histogram, macdLine, signalLine } = calculateMACD(
           closingPrices,
           Number(this.FAST_PERIOD),
@@ -303,11 +198,11 @@ export class TradingBotService implements OnModuleInit {
         if (histogram.length) {
           const latestHist = histogram[histogram.length - 1];
           console.log(
-            `${symbol}: [ws update] MACD hist=${latestHist.toFixed(6)}, closePrice=${symbolData.candles[histogram.length - 1].closePrice}, closeTime=${symbolData.candles[histogram.length - 1].time}, (fast=${macdLine[macdLine.length - 1].toFixed(6)}, signal=${signalLine[signalLine.length - 1].toFixed(6)})`,
+            `${symbol}: [ws update] MACD hist=${latestHist.toFixed(6)}, closePrice=${symbolData.candles[histogram.length - 1].closePrice}, closeTime=${symbolData.candles[histogram.length - 1].startTime}, (fast=${macdLine[macdLine.length - 1].toFixed(6)}, signal=${signalLine[signalLine.length - 1].toFixed(6)})`,
           );
 
           const smoothedSMA = calculateSmoothedSMA(
-            symbolData.candles.map(({ volume }) => volume),
+            symbolData.candles.map(({ volume }) => parseFloat(volume)),
             Number(this.VOLUME_SMA_SMOOTHING_PERIOD),
           );
 
@@ -319,21 +214,27 @@ export class TradingBotService implements OnModuleInit {
             symbolData.smaVolumes[symbolData.smaVolumes.length - 1];
           const previousSmoothedSmaVolume =
             symbolData.smaVolumes[symbolData.smaVolumes.length - 2];
-          const currentVolume =
-            symbolData.candles[symbolData.candles.length - 1].volume;
-          const previousVolume =
-            symbolData.candles[symbolData.candles.length - 2].volume;
+          const currentVolume = parseFloat(
+            symbolData.candles[symbolData.candles.length - 1].volume,
+          );
+          const previousVolume = parseFloat(
+            symbolData.candles[symbolData.candles.length - 2].volume,
+          );
           const increaseVolumePercent =
             ((currentVolume - previousVolume) / previousVolume) * 100;
 
           const openPositionCondition =
-            increaseVolumePercent > 10 ||
-            currentSmoothedSmaVolume > previousSmoothedSmaVolume;
-          await this.handleMacdSignal(
+            (increaseVolumePercent > 10 &&
+              currentSmoothedSmaVolume > previousSmoothedSmaVolume) ||
+            increaseVolumePercent > 60;
+
+          this.handleMacdSignal(
             symbol,
             latestHist,
             openPositionCondition,
-          );
+          ).catch((error) => {
+            console.error(`Error handling MACD signal for ${symbol}:`, error);
+          });
         }
       });
 
@@ -346,7 +247,7 @@ export class TradingBotService implements OnModuleInit {
       console.error('Ошибка при запуске бота', error);
       await this.telegramService.sendNotification(
         'error',
-        `Ошибка при запуске бота: ${error.message}`,
+        `Ошибка при запуске бота: ${error}`,
       );
     }
   }
@@ -364,7 +265,7 @@ export class TradingBotService implements OnModuleInit {
 
     // Проверяем, что для анализа доступно достаточно свечей
     const macdResult = calculateMACD(
-      symbolData.candles.map((item) => item.closePrice),
+      symbolData.candles.map((item) => parseFloat(item.closePrice)),
       Number(this.FAST_PERIOD),
       Number(this.SLOW_PERIOD),
       Number(this.SIGNAL_PERIOD),
@@ -401,7 +302,7 @@ export class TradingBotService implements OnModuleInit {
       const currentPrice =
         symbolData.candles[symbolData.candles.length - 1].closePrice;
       const currentTime =
-        symbolData.candles[symbolData.candles.length - 1].time;
+        symbolData.candles[symbolData.candles.length - 1].startTime;
 
       // Отправляем сигнал на открытие позиции против направления MACD
       if (currentSign < 0) {
