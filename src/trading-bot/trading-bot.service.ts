@@ -8,7 +8,9 @@ import { calculateMACD } from './utils/macd.utils';
 import { calculateSmoothedSMA } from './utils/sma.utils';
 import { SymbolData, WsKlineV5 } from './types';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { parseNumber } from '../utils/number';
 
+const limit = 300;
 @Injectable()
 export class TradingBotService implements OnModuleInit {
   private ws: WebsocketClient;
@@ -105,7 +107,7 @@ export class TradingBotService implements OnModuleInit {
           await this.bybitService.fetchCandlesWithoutLast(
             symbol,
             this.INTERVAL,
-            300,
+            limit,
           );
 
         this.symbolData.set(symbol, {
@@ -195,7 +197,7 @@ export class TradingBotService implements OnModuleInit {
           parseFloat(item.closePrice),
         );
         const { histogram, macdLine, signalLine } = calculateMACD(
-          closingPrices,
+          closingPrices.reverse(),
           Number(this.FAST_PERIOD),
           Number(this.SLOW_PERIOD),
           Number(this.SIGNAL_PERIOD),
@@ -238,6 +240,7 @@ export class TradingBotService implements OnModuleInit {
             symbol,
             latestHist,
             openPositionCondition,
+            histogram,
           ).catch((error) => {
             console.error(`Error handling MACD signal for ${symbol}:`, error);
           });
@@ -262,6 +265,7 @@ export class TradingBotService implements OnModuleInit {
     symbol: string,
     histogramValue: number,
     canOpenPositionByVolume: boolean,
+    macdHistogram: number[],
   ) {
     const symbolData = this.symbolData.get(symbol);
     if (!symbolData) return;
@@ -269,20 +273,13 @@ export class TradingBotService implements OnModuleInit {
     const currentHistogramAbs = Math.abs(histogramValue);
     const currentSign = Math.sign(histogramValue);
 
-    // Проверяем, что для анализа доступно достаточно свечей
-    const macdResult = calculateMACD(
-      symbolData.candles.map((item) => parseFloat(item.closePrice)),
-      Number(this.FAST_PERIOD),
-      Number(this.SLOW_PERIOD),
-      Number(this.SIGNAL_PERIOD),
-    );
-    if (macdResult.histogram.length < this.ONE_HISTOGRAM_DIRECTION_CANDLES) {
+    if (macdHistogram.length < this.ONE_HISTOGRAM_DIRECTION_CANDLES) {
       console.log(
         `${symbol}: [handleMacdSignal] Недостаточно свечей для проверки MACD направления. Требуется минимум ${this.ONE_HISTOGRAM_DIRECTION_CANDLES} свечей.`,
       );
       return;
     }
-    const lastCandles = macdResult.histogram.slice(
+    const lastCandles = macdHistogram.slice(
       -this.ONE_HISTOGRAM_DIRECTION_CANDLES,
     );
     const allSame = lastCandles.every(
@@ -316,7 +313,7 @@ export class TradingBotService implements OnModuleInit {
         await this.bybitService.fetchCandlesWithoutLast(
           symbol,
           higherInterval,
-          300,
+          limit,
         );
 
       if (!higherTimeframeCandles || higherTimeframeCandles.length === 0) {
@@ -337,47 +334,37 @@ export class TradingBotService implements OnModuleInit {
       }
 
       const higherTimeframeHistogram =
-        higherTimeframeMACD.histogram[higherTimeframeMACD.histogram.length - 1];
-      const higherTimeframePrevHistogram =
         higherTimeframeMACD.histogram[higherTimeframeMACD.histogram.length - 2];
-      const higherTimeframeStartedToDown =
+      const higherTimeframePrevHistogram =
+        higherTimeframeMACD.histogram[higherTimeframeMACD.histogram.length - 3];
+      const higherTimeframeAbsStartedToDown =
         Math.abs(higherTimeframeHistogram) <
         Math.abs(higherTimeframePrevHistogram);
+      // const currentHigherTimeframeSign = Math.sign(higherTimeframeHistogram);
 
       // For short position: small timeframe MACD > 0 and higher timeframe MACD < 0
       // For long position: small timeframe MACD < 0 and higher timeframe MACD > 0
-      const isShortSignal = currentSign > 0 && higherTimeframeHistogram < 0;
-      const isLongSignal = currentSign < 0 && higherTimeframeHistogram > 0;
+      const isShortSignal =
+        histogramValue > 0 &&
+        (higherTimeframeHistogram < 0 ||
+          (higherTimeframeHistogram > 0 && higherTimeframeAbsStartedToDown));
 
-      if (isShortSignal || isLongSignal || higherTimeframeStartedToDown) {
-        const currentPrice =
-          symbolData.candles[symbolData.candles.length - 1].closePrice;
-        const currentTime =
-          symbolData.candles[symbolData.candles.length - 1].startTime;
+      const isLongSignal =
+        histogramValue < 0 &&
+        (higherTimeframeHistogram > 0 ||
+          (higherTimeframeHistogram < 0 && higherTimeframeAbsStartedToDown));
 
-        if (isLongSignal) {
-          await this.telegramService.sendNotification(
-            'info',
-            `${symbol} 📈 Сигнал на открытие лонга\n` +
-              `Цена: ${currentPrice}\n` +
-              `Время: ${currentTime}\n` +
-              `MACD: ${histogramValue.toFixed(6)}\n` +
-              `MACD (${higherInterval}m): ${higherTimeframeHistogram.toFixed(6)}\n` +
-              `MACD (${higherInterval}m) prev: ${higherTimeframePrevHistogram.toFixed(6)}\n` +
-              `Тип: ${higherTimeframeStartedToDown ? 'Начало разворота' : 'Против тренда'}`,
-          );
-        } else if (isShortSignal) {
-          await this.telegramService.sendNotification(
-            'info',
-            `${symbol} 📉 Сигнал на открытие шорта\n` +
-              `Цена: ${currentPrice}\n` +
-              `Время: ${currentTime}\n` +
-              `MACD: ${histogramValue.toFixed(6)}\n` +
-              `MACD (${higherInterval}m): ${higherTimeframeHistogram.toFixed(6)}\n` +
-              `MACD (${higherInterval}m) prev: ${higherTimeframePrevHistogram.toFixed(6)}\n` +
-              `Тип: ${higherTimeframeStartedToDown ? 'Начало разворота' : 'Против тренда'}`,
-          );
-        }
+      const { closePrice: currentClosePrice } =
+        symbolData.candles[symbolData.candles.length - 1];
+
+      if (isLongSignal || isShortSignal) {
+        await this.telegramService.sendNotification(
+          'info',
+          `${symbol} 📈 Сигнал на открытие ${isLongSignal ? 'лонга' : 'шорта'}\n` +
+            `Цена: ${parseNumber(Number(currentClosePrice))}\n` +
+            `MACD: ${histogramValue.toFixed(6)}\n` +
+            `MACD (${higherInterval}m) prev: ${higherTimeframePrevHistogram.toFixed(6)}\n`,
+        );
       } else {
         console.log(
           `${symbol}: [handleMacdSignal] Нет сигнала для открытия позиции. MACD малого таймфрейма: ${currentSign}, MACD большого таймфрейма: ${higherTimeframeHistogram.toFixed(6)}`,

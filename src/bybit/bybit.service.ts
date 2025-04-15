@@ -92,7 +92,7 @@ export class BybitService {
       }
 
       const list = response.result.list.map((candle) => ({
-        openPrice: candle[0],
+        openPrice: candle[1],
         startTime: dayjs(Number(candle[0])).format('YY-MM-DD HH:mm'),
         closePrice: candle[4],
         volume: candle[5],
@@ -101,7 +101,6 @@ export class BybitService {
       list.sort((a, b) => Number(a.startTime) - Number(b.startTime));
       list.pop(); // Убираем последнюю незакрытую свечу
 
-      console.log(list, symbol);
       const smoothedSMA = calculateSmoothedSMA(
         list.map((item) => Number(item.volume)),
         Number(this.VOLUME_SMA_SMOOTHING_PERIOD),
