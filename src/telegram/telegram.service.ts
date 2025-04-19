@@ -38,7 +38,9 @@ export class TelegramService implements OnModuleInit {
     }
 
     try {
-      await this.bot.telegram.sendMessage(this.channelId, prefix + message);
+      const fullMessage = prefix + message;
+      console.log(`[TELEGRAM] ${fullMessage}`);
+      await this.bot.telegram.sendMessage(this.channelId, fullMessage);
     } catch (err) {
       console.error('Ошибка отправки уведомления в Telegram:', err);
     }

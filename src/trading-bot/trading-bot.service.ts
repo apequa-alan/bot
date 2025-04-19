@@ -80,7 +80,8 @@ export class TradingBotService implements OnModuleInit {
         this.TOP_VOLUME_COINS_COUNT,
       );
       if (newTopCoins.length === 0) {
-        console.error(
+        this.telegramService.sendNotification(
+          'error',
           'Не удалось получить новый список монет для отслеживания',
         );
         return;
@@ -129,7 +130,6 @@ export class TradingBotService implements OnModuleInit {
           `Удалены: ${coinsToRemove.join(', ') || 'нет'}`,
       );
     } catch (error) {
-      console.error('Ошибка при обновлении списка монет', error);
       await this.telegramService.sendNotification(
         'error',
         `Ошибка при обновлении списка монет: ${error}`,
@@ -143,7 +143,6 @@ export class TradingBotService implements OnModuleInit {
       await this.updateTopVolumeCoins();
 
       this.ws.on('open', () => {
-        console.log('WebSocket подключен к Bybit.');
         this.telegramService.sendNotification(
           'info',
           'WebSocket подключен к Bybit.',
@@ -151,12 +150,10 @@ export class TradingBotService implements OnModuleInit {
       });
 
       this.ws.on('close', () => {
-        console.log('WebSocket отключен.');
         this.telegramService.sendNotification('error', 'WebSocket отключился.');
       });
 
       this.ws.on('error', ((error: any) => {
-        console.error('WebSocket ошибка:', error);
         this.telegramService.sendNotification(
           'error',
           `WebSocket ошибка: ${error}`,
@@ -247,13 +244,11 @@ export class TradingBotService implements OnModuleInit {
         }
       });
 
-      console.log('Бот запущен и ожидает новые свечи по WebSocket...');
       await this.telegramService.sendNotification(
         'info',
         'Бот запущен и ожидает новые свечи.',
       );
     } catch (error) {
-      console.error('Ошибка при запуске бота', error);
       await this.telegramService.sendNotification(
         'error',
         `Ошибка при запуске бота: ${error}`,
@@ -292,6 +287,7 @@ export class TradingBotService implements OnModuleInit {
       return;
     }
 
+    // Проверяем ослабление сигнала: если абсолютное значение MACD не снизилось
     if (currentHistogramAbs >= symbolData.prevHistogramAbs) {
       console.log(
         `${symbol}: [handleMacdSignal] Абсолютное значение MACD не снизилось.`,
@@ -340,10 +336,7 @@ export class TradingBotService implements OnModuleInit {
       const higherTimeframeAbsStartedToDown =
         Math.abs(higherTimeframeHistogram) <
         Math.abs(higherTimeframePrevHistogram);
-      // const currentHigherTimeframeSign = Math.sign(higherTimeframeHistogram);
 
-      // For short position: small timeframe MACD > 0 and higher timeframe MACD < 0
-      // For long position: small timeframe MACD < 0 and higher timeframe MACD > 0
       const isShortSignal =
         histogramValue > 0 &&
         (higherTimeframeHistogram < 0 ||
