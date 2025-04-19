@@ -96,6 +96,9 @@ export class BybitService {
         startTime: dayjs(Number(candle[0])).format('YY-MM-DD HH:mm'),
         closePrice: candle[4],
         volume: candle[5],
+        highPrice: candle[2],
+        lowPrice: candle[3],
+        turnover: candle[6],
       }));
 
       list.sort((a, b) => Number(a.startTime) - Number(b.startTime));

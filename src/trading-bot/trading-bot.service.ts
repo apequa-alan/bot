@@ -6,9 +6,14 @@ import { TelegramService } from '../telegram/telegram.service';
 import { BybitService } from '../bybit/bybit.service';
 import { calculateMACD } from './utils/macd.utils';
 import { calculateSmoothedSMA } from './utils/sma.utils';
-import { SymbolData, WsKlineV5 } from './types';
+import { SymbolData, WsKlineV5, Signal } from './types';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { parseNumber } from '../utils/number';
+
+interface ProfitStopConfig {
+  profit: number;
+  stop: number;
+}
 
 const limit = 300;
 @Injectable()
@@ -17,6 +22,25 @@ export class TradingBotService implements OnModuleInit {
   private symbolData: Map<string, SymbolData> = new Map();
   private readonly TOP_VOLUME_COINS_COUNT = 10;
   private readonly ONE_HISTOGRAM_DIRECTION_CANDLES = 5;
+  private activeSignals: Signal[] = [];
+
+  // Configure profit and stop limit values for each timeframe
+  private readonly TIMEFRAME_CONFIG: Partial<
+    Record<KlineIntervalV3, ProfitStopConfig>
+  > = {
+    '1': { profit: 0.6, stop: 0.4 },
+    '3': { profit: 0.8, stop: 0.65 },
+    '5': { profit: 1, stop: 0.7 },
+    '15': { profit: 1.5, stop: 0.9 },
+    '30': { profit: 2, stop: 1.2 },
+    '60': { profit: 2.5, stop: 1.5 },
+    '120': { profit: 3, stop: 1.8 },
+    '240': { profit: 3.5, stop: 2 },
+    '360': { profit: 4, stop: 2.5 },
+    D: { profit: 5, stop: 3 },
+    W: { profit: 8, stop: 5 },
+    M: { profit: 10, stop: 6 },
+  };
 
   private readonly BYBIT_API_KEY: string;
   private readonly BYBIT_API_SECRET: string;
@@ -143,10 +167,7 @@ export class TradingBotService implements OnModuleInit {
       await this.updateTopVolumeCoins();
 
       this.ws.on('open', () => {
-        this.telegramService.sendNotification(
-          'info',
-          'WebSocket подключен к Bybit.',
-        );
+        console.log('WebSocket подключен к Bybit.');
       });
 
       this.ws.on('close', () => {
@@ -160,6 +181,14 @@ export class TradingBotService implements OnModuleInit {
         );
       }) as unknown as never);
 
+      this.ws.on('reconnect', () => {
+        console.log('WebSocket reconnecting...');
+      });
+
+      this.ws.on('reconnected', () => {
+        console.log('WebSocket reconnected');
+      });
+
       this.ws.on('update', (data: { topic: string; data: WsKlineV5[] }) => {
         if (!data.topic || !data.data) return;
 
@@ -172,13 +201,18 @@ export class TradingBotService implements OnModuleInit {
         if (!latestKline) return;
 
         const close = parseFloat(latestKline.close);
+        const high = parseFloat(latestKline.high);
+        const low = parseFloat(latestKline.low);
         const isClosed = latestKline.confirm;
         if (!isClosed) return;
 
         const startTime = dayjs(latestKline.start).format('YY-MM-DD HH:mm');
         console.log(
-          `${symbol}: Новая закрытая свеча: ${startTime}, close=${close}`,
+          `${symbol}: Новая закрытая свеча: ${startTime}, close=${close}, high=${high}, low=${low}`,
         );
+
+        // Check for profit on active signals using high and low prices
+        this.checkSignalProfit(symbol, close, high, low);
 
         symbolData.candles.push({
           startTime: latestKline.start.toString(),
@@ -199,6 +233,10 @@ export class TradingBotService implements OnModuleInit {
           Number(this.SLOW_PERIOD),
           Number(this.SIGNAL_PERIOD),
         );
+        console.log('symbol', symbol);
+        console.log(JSON.stringify(closingPrices.reverse()));
+        console.log(JSON.stringify(histogram));
+        console.log('symbol END ======', symbol);
 
         if (histogram.length) {
           const latestHist = histogram[histogram.length - 1];
@@ -244,12 +282,12 @@ export class TradingBotService implements OnModuleInit {
         }
       });
 
-      await this.telegramService.sendNotification(
+      this.telegramService.sendNotification(
         'info',
         'Бот запущен и ожидает новые свечи.',
       );
     } catch (error) {
-      await this.telegramService.sendNotification(
+      this.telegramService.sendNotification(
         'error',
         `Ошибка при запуске бота: ${error}`,
       );
@@ -264,6 +302,12 @@ export class TradingBotService implements OnModuleInit {
   ) {
     const symbolData = this.symbolData.get(symbol);
     if (!symbolData) return;
+
+    // Check if symbol already has an active signal - if so, don't generate a new one
+    if (this.hasActiveSignal(symbol)) {
+      console.log(`${symbol}: Уже есть активный сигнал, новый не генерируется`);
+      return;
+    }
 
     const currentHistogramAbs = Math.abs(histogramValue);
     const currentSign = Math.sign(histogramValue);
@@ -351,18 +395,170 @@ export class TradingBotService implements OnModuleInit {
         symbolData.candles[symbolData.candles.length - 1];
 
       if (isLongSignal || isShortSignal) {
-        await this.telegramService.sendNotification(
+        const currentPrice = parseFloat(currentClosePrice);
+        const currentTime =
+          symbolData.candles[symbolData.candles.length - 1].startTime;
+
+        const signalMessage =
+          `${symbol} ${isLongSignal ? '📈 Сигнал на открытие лонга' : '📉 Сигнал на открытие шорта'}\n` +
+          `Цена: ${parseNumber(Number(currentClosePrice))}\n` +
+          `MACD: ${histogramValue.toFixed(6)}\n` +
+          `MACD (${higherInterval}m) prev: ${higherTimeframePrevHistogram.toFixed(6)}\n` +
+          `TP: ${this.getProfitStopConfig().profit}%, SL: ${this.getProfitStopConfig().stop}%`;
+
+        // Send signal notification and get message ID
+        const messageId = await this.telegramService.sendNotification(
           'info',
-          `${symbol} 📈 Сигнал на открытие ${isLongSignal ? 'лонга' : 'шорта'}\n` +
-            `Цена: ${parseNumber(Number(currentClosePrice))}\n` +
-            `MACD: ${histogramValue.toFixed(6)}\n` +
-            `MACD (${higherInterval}m) prev: ${higherTimeframePrevHistogram.toFixed(6)}\n`,
+          signalMessage,
         );
+
+        // Add to active signals with message ID
+        this.activeSignals.push({
+          symbol,
+          entryPrice: currentPrice,
+          entryTime: currentTime,
+          type: isLongSignal ? 'long' : 'short',
+          active: true,
+          maxProfit: 0,
+          notified: false,
+          messageId, // Store the message ID for future replies
+        });
       } else {
         console.log(
           `${symbol}: [handleMacdSignal] Нет сигнала для открытия позиции. MACD малого таймфрейма: ${currentSign}, MACD большого таймфрейма: ${higherTimeframeHistogram.toFixed(6)}`,
         );
       }
     }
+  }
+
+  // Check if symbol already has an active signal
+  private hasActiveSignal(symbol: string): boolean {
+    return this.activeSignals.some(
+      (signal) => signal.symbol === symbol && signal.active,
+    );
+  }
+
+  // Get profit/stop config for current timeframe
+  private getProfitStopConfig(): ProfitStopConfig {
+    return this.TIMEFRAME_CONFIG[this.INTERVAL] || { profit: 1, stop: 0.6 };
+  }
+
+  // Update checkSignalProfit method to use high/low prices
+  private checkSignalProfit(
+    symbol: string,
+    currentPrice: number,
+    highPrice: number,
+    lowPrice: number,
+  ): void {
+    // Find active signals for this symbol
+    const symbolSignals = this.activeSignals.filter(
+      (signal) => signal.symbol === symbol && signal.active,
+    );
+
+    if (!symbolSignals.length) return;
+
+    const config = this.getProfitStopConfig();
+
+    for (const signal of symbolSignals) {
+      let profitPercent = 0;
+      let maxPossibleProfitPercent = 0;
+
+      // Calculate profit based on position type
+      if (signal.type === 'long') {
+        // For long positions, use close price for current profit
+        profitPercent =
+          ((currentPrice - signal.entryPrice) / signal.entryPrice) * 100;
+        // For long positions, use high price for max possible profit
+        maxPossibleProfitPercent =
+          ((highPrice - signal.entryPrice) / signal.entryPrice) * 100;
+      } else if (signal.type === 'short') {
+        // For short positions, use close price for current profit
+        profitPercent =
+          ((signal.entryPrice - currentPrice) / signal.entryPrice) * 100;
+        // For short positions, use low price for max possible profit
+        maxPossibleProfitPercent =
+          ((signal.entryPrice - lowPrice) / signal.entryPrice) * 100;
+      }
+
+      // Update max profit if the max possible profit is higher
+      if (maxPossibleProfitPercent > signal.maxProfit) {
+        signal.maxProfit = maxPossibleProfitPercent;
+      }
+
+      // Send notification if max profit exceeds threshold and hasn't been notified yet
+      if (signal.maxProfit >= config.profit && !signal.notified) {
+        signal.notified = true;
+
+        const profitMessage =
+          `${symbol} 💰 Прибыль по сигналу!\n` +
+          `Тип: ${signal.type === 'long' ? 'Лонг' : 'Шорт'}\n` +
+          `Вход: ${signal.entryPrice}\n` +
+          `Текущая цена: ${currentPrice}\n` +
+          `Макс. цена: ${signal.type === 'long' ? highPrice : lowPrice}\n` +
+          `Макс. прибыль: ${signal.maxProfit.toFixed(2)}%\n` +
+          `Текущая прибыль: ${profitPercent.toFixed(2)}%`;
+
+        // Send as reply to original signal
+        this.telegramService.sendReplyNotification(
+          'fix',
+          profitMessage,
+          signal.messageId,
+        );
+      }
+
+      // Close signal if stop reached
+      if (profitPercent <= -config.stop) {
+        signal.active = false;
+
+        const stopLossMessage =
+          `${symbol} 🔴 Стоп-лосс по сигналу\n` +
+          `Тип: ${signal.type === 'long' ? 'Лонг' : 'Шорт'}\n` +
+          `Вход: ${signal.entryPrice}\n` +
+          `Текущая цена: ${currentPrice}\n` +
+          `Убыток: ${profitPercent.toFixed(2)}%`;
+
+        // Send as reply to original signal
+        this.telegramService.sendReplyNotification(
+          'error',
+          stopLossMessage,
+          signal.messageId,
+        );
+      }
+
+      // Close signal if current profit is negative after reaching profit threshold
+      if (signal.maxProfit >= config.profit && profitPercent < 0) {
+        signal.active = false;
+
+        const closedMessage =
+          `${symbol} ⚠️ Сигнал закрыт после разворота\n` +
+          `Тип: ${signal.type === 'long' ? 'Лонг' : 'Шорт'}\n` +
+          `Вход: ${signal.entryPrice}\n` +
+          `Текущая цена: ${currentPrice}\n` +
+          `Макс. прибыль: ${signal.maxProfit.toFixed(2)}%\n` +
+          `Текущая прибыль: ${profitPercent.toFixed(2)}%`;
+
+        // Send as reply to original signal
+        this.telegramService.sendReplyNotification(
+          'info',
+          closedMessage,
+          signal.messageId,
+        );
+      }
+    }
+  }
+
+  // Add cleanup method to prevent memory leaks
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  private cleanupOldSignals() {
+    // Keep only active signals or signals created in the last 7 days
+    const sevenDaysAgo = dayjs().subtract(7, 'day').valueOf();
+    this.activeSignals = this.activeSignals.filter((signal) => {
+      return signal.active || dayjs(signal.entryTime).valueOf() > sevenDaysAgo;
+    });
+
+    this.telegramService.sendNotification(
+      'info',
+      `Очистка старых сигналов завершена. Активных сигналов: ${this.activeSignals.filter((s) => s.active).length}`,
+    );
   }
 }

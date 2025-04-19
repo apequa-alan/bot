@@ -1,11 +1,11 @@
 export interface Candle {
   startTime: string;
-  openPrice?: string;
-  highPrice?: string;
-  lowPrice?: string;
+  openPrice: string;
+  highPrice: string;
+  lowPrice: string;
   closePrice: string;
   volume: string;
-  turnover?: string;
+  turnover: string;
 }
 
 export interface SymbolData {
@@ -26,4 +26,15 @@ export interface WsKlineV5 {
   confirm: boolean;
   timestamp: number;
   cross_seq: number;
+}
+
+export interface Signal {
+  symbol: string;
+  entryPrice: number;
+  entryTime: string;
+  type: 'long' | 'short';
+  active: boolean;
+  maxProfit: number;
+  notified: boolean;
+  messageId: number;
 }
