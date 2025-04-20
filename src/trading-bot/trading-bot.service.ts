@@ -6,14 +6,15 @@ import { TelegramService } from '../telegram/telegram.service';
 import { BybitService } from '../bybit/bybit.service';
 import { calculateMACD } from './utils/macd.utils';
 import { calculateSmoothedSMA } from './utils/sma.utils';
-import { SymbolData, WsKlineV5, Signal } from './types';
+import {
+  SymbolData,
+  WsKlineV5,
+  Signal,
+  SignalStats,
+  ProfitStopConfig,
+} from './types';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { parseNumber } from '../utils/number';
-
-interface ProfitStopConfig {
-  profit: number;
-  stop: number;
-}
 
 const limit = 300;
 @Injectable()
@@ -422,6 +423,7 @@ export class TradingBotService implements OnModuleInit {
           maxProfit: 0,
           notified: false,
           messageId, // Store the message ID for future replies
+          status: 'active', // Add status field
         });
       } else {
         console.log(
@@ -488,6 +490,7 @@ export class TradingBotService implements OnModuleInit {
       // Send notification if max profit exceeds threshold and hasn't been notified yet
       if (signal.maxProfit >= config.profit && !signal.notified) {
         signal.notified = true;
+        signal.status = 'success'; // Mark as success when profit target is hit
 
         const profitMessage =
           `${symbol} 💰 Прибыль по сигналу!\n` +
@@ -509,6 +512,7 @@ export class TradingBotService implements OnModuleInit {
       // Close signal if stop reached
       if (profitPercent <= -config.stop) {
         signal.active = false;
+        signal.status = 'stopped'; // Mark as stopped when stop loss is hit
 
         const stopLossMessage =
           `${symbol} 🔴 Стоп-лосс по сигналу\n` +
@@ -528,6 +532,7 @@ export class TradingBotService implements OnModuleInit {
       // Close signal if current profit is negative after reaching profit threshold
       if (signal.maxProfit >= config.profit && profitPercent < 0) {
         signal.active = false;
+        signal.status = 'failure'; // Mark as failure when it reverses after hitting profit
 
         const closedMessage =
           `${symbol} ⚠️ Сигнал закрыт после разворота\n` +
@@ -544,6 +549,159 @@ export class TradingBotService implements OnModuleInit {
           signal.messageId,
         );
       }
+    }
+  }
+
+  // Add method to generate daily statistics
+  private generateSignalStatistics(): SignalStats[] {
+    const stats: Record<string, SignalStats> = {};
+    const dayStart = dayjs().startOf('day').valueOf();
+
+    // Consider only signals from the current day
+    const dailySignals = this.activeSignals.filter(
+      (signal) => dayjs(signal.entryTime).valueOf() >= dayStart,
+    );
+
+    // Initialize stats object for each symbol
+    for (const signal of dailySignals) {
+      if (!stats[signal.symbol]) {
+        stats[signal.symbol] = {
+          symbol: signal.symbol,
+          success: 0,
+          failure: 0,
+          stopped: 0,
+          total: 0,
+          successRate: 0,
+          failureRate: 0,
+        };
+      }
+
+      // Count by status
+      stats[signal.symbol].total++;
+
+      if (signal.status === 'success') {
+        stats[signal.symbol].success++;
+      } else if (signal.status === 'failure') {
+        stats[signal.symbol].failure++;
+      } else if (signal.status === 'stopped') {
+        stats[signal.symbol].stopped++;
+      }
+    }
+
+    // Calculate rates
+    Object.values(stats).forEach((stat) => {
+      stat.successRate = stat.total > 0 ? (stat.success / stat.total) * 100 : 0;
+      stat.failureRate = stat.total > 0 ? (stat.failure / stat.total) * 100 : 0;
+    });
+
+    return Object.values(stats);
+  }
+
+  // Add method to send daily report at end of day
+  @Cron('0 0 23 * * *') // Run at 23:00 every day
+  private async sendDailyReport() {
+    try {
+      const stats = this.generateSignalStatistics();
+
+      if (stats.length === 0) {
+        await this.telegramService.sendNotification(
+          'info',
+          'Ежедневный отчет: нет сигналов за сегодня\\.',
+        );
+        return;
+      }
+
+      // Sort by success rate for finding best/worst performers
+      const sortedBySuccessRate = [...stats].sort(
+        (a, b) => b.successRate - a.successRate,
+      );
+      const sortedByFailureRate = [...stats].sort(
+        (a, b) => b.failureRate - a.failureRate,
+      );
+
+      // Best and worst performers with null checks
+      const bestSymbol =
+        sortedBySuccessRate.length > 0 ? sortedBySuccessRate[0] : null;
+      const worstSymbol =
+        sortedBySuccessRate.length > 0
+          ? sortedBySuccessRate[sortedBySuccessRate.length - 1]
+          : null;
+      const highestFailureSymbol =
+        sortedByFailureRate.length > 0 ? sortedByFailureRate[0] : null;
+      const lowestFailureSymbol =
+        sortedByFailureRate.length > 0
+          ? sortedByFailureRate[sortedByFailureRate.length - 1]
+          : null;
+
+      // Build report message with MarkdownV2 formatting
+      // Note: In MarkdownV2, special characters must be escaped with a backslash: _*[]()~`>#+-=|{}.!
+      let reportMessage = '📊 *Ежедневный отчет по сигналам* 📊\n\n';
+
+      reportMessage += '*Статистика по символам:*\n';
+      stats.forEach((stat) => {
+        const escapedSymbol = stat.symbol.replace(
+          /([_*[\]()~`>#+=|{}.!])/g,
+          '\\$1',
+        );
+        reportMessage += `${escapedSymbol}: ✅ ${stat.success}, ❌ ${stat.failure}, 🛑 ${stat.stopped} \\(Всего: ${stat.total}\\)\n`;
+      });
+
+      reportMessage += '\n*Лучшие и худшие результаты:*\n';
+
+      if (bestSymbol) {
+        const escapedSymbol = bestSymbol.symbol.replace(
+          /([_*[\]()~`>#+=|{}.!])/g,
+          '\\$1',
+        );
+        const successRate =
+          typeof bestSymbol.successRate === 'number'
+            ? bestSymbol.successRate
+            : 0;
+        reportMessage += `✅ Наибольший % успеха: ${escapedSymbol} \\(${successRate.toFixed(2)}%\\)\n`;
+      }
+
+      if (worstSymbol) {
+        const escapedSymbol = worstSymbol.symbol.replace(
+          /([_*[\]()~`>#+=|{}.!])/g,
+          '\\$1',
+        );
+        const successRate =
+          typeof worstSymbol.successRate === 'number'
+            ? worstSymbol.successRate
+            : 0;
+        reportMessage += `✅ Наименьший % успеха: ${escapedSymbol} \\(${successRate.toFixed(2)}%\\)\n`;
+      }
+
+      if (highestFailureSymbol) {
+        const escapedSymbol = highestFailureSymbol.symbol.replace(
+          /([_*[\]()~`>#+=|{}.!])/g,
+          '\\$1',
+        );
+        const failureRate =
+          typeof highestFailureSymbol.failureRate === 'number'
+            ? highestFailureSymbol.failureRate
+            : 0;
+        reportMessage += `❌ Наибольший % неудач: ${escapedSymbol} \\(${failureRate.toFixed(2)}%\\)\n`;
+      }
+
+      if (lowestFailureSymbol) {
+        const escapedSymbol = lowestFailureSymbol.symbol.replace(
+          /([_*[\]()~`>#+=|{}.!])/g,
+          '\\$1',
+        );
+        const failureRate =
+          typeof lowestFailureSymbol.failureRate === 'number'
+            ? lowestFailureSymbol.failureRate
+            : 0;
+        reportMessage += `❌ Наименьший % неудач: ${escapedSymbol} \\(${failureRate.toFixed(2)}%\\)\n`;
+      }
+
+      await this.telegramService.sendNotification('info', reportMessage);
+    } catch (error) {
+      await this.telegramService.sendNotification(
+        'error',
+        `Ошибка при генерации ежедневного отчета: ${error instanceof Error ? error.message.replace(/([_*[\]()~`>#+=|{}.!])/g, '\\$1') : String(error).replace(/([_*[\]()~`>#+=|{}.!])/g, '\\$1')}`,
+      );
     }
   }
 

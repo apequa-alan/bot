@@ -23,6 +23,16 @@ export class TelegramService implements OnModuleInit {
     });
   }
 
+  /**
+   * Escapes special characters for Telegram's MarkdownV2 format
+   * @param text The text to escape
+   * @returns Escaped text safe for MarkdownV2
+   */
+  private escapeMarkdown(text: string): string {
+    // Characters that need to be escaped in MarkdownV2: _*[]()~`>#+-=|{}.!
+    return text.replace(/([_*[\]()~`>#+=|{}.!\\])/g, '\\$1');
+  }
+
   async sendNotification(
     type: 'error' | 'info' | 'fix',
     message: string,
@@ -41,11 +51,12 @@ export class TelegramService implements OnModuleInit {
     }
 
     try {
-      const fullMessage = prefix + message;
-      console.log(`[TELEGRAM] ${fullMessage}`);
+      const fullMessage = this.escapeMarkdown(prefix + message);
+      console.log(`[TELEGRAM] ${prefix + message}`);
       const result = await this.bot.telegram.sendMessage(
         this.channelId,
         fullMessage,
+        { parse_mode: 'MarkdownV2' },
       );
       return result.message_id; // Return the message ID for future replies
     } catch (err) {
@@ -73,14 +84,17 @@ export class TelegramService implements OnModuleInit {
     }
 
     try {
-      const fullMessage = prefix + message;
-      console.log(`[TELEGRAM] Reply to ${replyToMessageId}: ${fullMessage}`);
+      const fullMessage = this.escapeMarkdown(prefix + message);
+      console.log(
+        `[TELEGRAM] Reply to ${replyToMessageId}: ${prefix + message}`,
+      );
       const result = await this.bot.telegram.sendMessage(
         this.channelId,
         fullMessage,
         {
           reply_to_message_id: replyToMessageId,
           allow_sending_without_reply: true,
+          parse_mode: 'MarkdownV2',
         } as any,
       );
       return result.message_id;

@@ -37,4 +37,20 @@ export interface Signal {
   maxProfit: number;
   notified: boolean;
   messageId: number;
+  status?: 'success' | 'failure' | 'stopped' | 'active';
+}
+
+export interface ProfitStopConfig {
+  profit: number;
+  stop: number;
+}
+
+export interface SignalStats {
+  symbol: string;
+  success: number;
+  failure: number;
+  stopped: number;
+  total: number;
+  successRate: number;
+  failureRate: number;
 }
