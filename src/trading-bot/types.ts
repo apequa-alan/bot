@@ -38,6 +38,12 @@ export interface Signal {
   notified: boolean;
   messageId: number;
   status?: 'success' | 'failure' | 'stopped' | 'active';
+  stopLoss?: number;
+  takeProfit?: number;
+  timestamp?: number;
+  exitPrice?: number;
+  exitTimestamp?: number;
+  profitLoss?: number;
 }
 
 export interface ProfitStopConfig {

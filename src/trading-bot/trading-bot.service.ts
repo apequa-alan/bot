@@ -9,12 +9,13 @@ import { calculateSmoothedSMA } from './utils/sma.utils';
 import {
   SymbolData,
   WsKlineV5,
-  Signal,
   SignalStats,
   ProfitStopConfig,
 } from './types';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { SignalsService } from '../signals/signals.service';
 import { parseNumber } from '../utils/number';
+import { Signal } from '../signals/entities/signal.entity';
 
 const limit = 300;
 @Injectable()
@@ -23,7 +24,6 @@ export class TradingBotService implements OnModuleInit {
   private symbolData: Map<string, SymbolData> = new Map();
   private readonly TOP_VOLUME_COINS_COUNT = 10;
   private readonly ONE_HISTOGRAM_DIRECTION_CANDLES = 5;
-  private activeSignals: Signal[] = [];
 
   // Configure profit and stop limit values for each timeframe
   private readonly TIMEFRAME_CONFIG: Partial<
@@ -31,7 +31,7 @@ export class TradingBotService implements OnModuleInit {
   > = {
     '1': { profit: 0.6, stop: 0.4 },
     '3': { profit: 0.8, stop: 0.65 },
-    '5': { profit: 1, stop: 0.7 },
+    '5': { profit: 1, stop: 1 },
     '15': { profit: 1.5, stop: 0.9 },
     '30': { profit: 2, stop: 1.2 },
     '60': { profit: 2.5, stop: 1.5 },
@@ -71,6 +71,7 @@ export class TradingBotService implements OnModuleInit {
     private readonly configService: ConfigService,
     private readonly telegramService: TelegramService,
     private readonly bybitService: BybitService,
+    private readonly signalsService: SignalsService,
   ) {
     this.BYBIT_API_KEY = this.configService.get<string>('BYBIT_API_KEY') ?? '';
     this.BYBIT_API_SECRET =
@@ -190,7 +191,7 @@ export class TradingBotService implements OnModuleInit {
         console.log('WebSocket reconnected');
       });
 
-      this.ws.on('update', (data: { topic: string; data: WsKlineV5[] }) => {
+      this.ws.on('update', async (data: { topic: string; data: WsKlineV5[] }) => {
         if (!data.topic || !data.data) return;
 
         const symbol = data.topic.split('.')[2];
@@ -213,7 +214,15 @@ export class TradingBotService implements OnModuleInit {
         );
 
         // Check for profit on active signals using high and low prices
-        this.checkSignalProfit(symbol, close, high, low);
+        await this.signalsService.checkSignalProfit(
+         {
+          symbol,
+          currentPrice: close,
+          highPrice: high,
+          lowPrice: low,
+          profitConfig: this.getProfitStopConfig(),
+         }
+        );
 
         symbolData.candles.push({
           startTime: latestKline.start.toString(),
@@ -304,8 +313,9 @@ export class TradingBotService implements OnModuleInit {
     const symbolData = this.symbolData.get(symbol);
     if (!symbolData) return;
 
-    // Check if symbol already has an active signal - if so, don't generate a new one
-    if (this.hasActiveSignal(symbol)) {
+    // Check if symbol already has an active signal
+    const activeSignals = await this.signalsService.getActiveSignals();
+    if (activeSignals.some(signal => signal.symbol === symbol && signal.status === 'active')) {
       console.log(`${symbol}: Уже есть активный сигнал, новый не генерируется`);
       return;
     }
@@ -397,34 +407,33 @@ export class TradingBotService implements OnModuleInit {
 
       if (isLongSignal || isShortSignal) {
         const currentPrice = parseFloat(currentClosePrice);
-        const currentTime =
-          symbolData.candles[symbolData.candles.length - 1].startTime;
+        const currentTime = symbolData.candles[symbolData.candles.length - 1].startTime;
+        const config = this.getProfitStopConfig();
 
-        const signalMessage =
-          `${symbol} ${isLongSignal ? '📈 Сигнал на открытие лонга' : '📉 Сигнал на открытие шорта'}\n` +
+        const signalMessage = `${symbol} ${isLongSignal ? '📈 Сигнал на открытие лонга' : '📉 Сигнал на открытие шорта'}\n` +
           `Цена: ${parseNumber(Number(currentClosePrice))}\n` +
-          `MACD: ${histogramValue.toFixed(6)}\n` +
-          `MACD (${higherInterval}m) prev: ${higherTimeframePrevHistogram.toFixed(6)}\n` +
-          `TP: ${this.getProfitStopConfig().profit}%, SL: ${this.getProfitStopConfig().stop}%`;
+          `TP: ${config.profit}%, SL: ${config.stop}%`;
 
-        // Send signal notification and get message ID
-        const messageId = await this.telegramService.sendNotification(
-          'info',
-          signalMessage,
-        );
+        const messageId = await this.telegramService.sendNotification('info', signalMessage);
 
-        // Add to active signals with message ID
-        this.activeSignals.push({
-          symbol,
-          entryPrice: currentPrice,
-          entryTime: currentTime,
-          type: isLongSignal ? 'long' : 'short',
-          active: true,
-          maxProfit: 0,
-          notified: false,
-          messageId, // Store the message ID for future replies
-          status: 'active', // Add status field
-        });
+        const signal = new Signal();
+        signal.symbol = symbol;
+        signal.entryPrice = currentPrice;
+        signal.entryTime = currentTime;
+        signal.type = isLongSignal ? 'long' : 'short';
+        signal.active = true;
+        signal.maxProfit = 0;
+        signal.notified = false;
+        signal.messageId = messageId;
+        signal.status = 'active';
+        signal.stopLoss = currentPrice * (1 - config.stop / 100);
+        signal.takeProfit = currentPrice * (1 + config.profit / 100);
+        signal.timestamp = Date.now();
+        signal.exitPrice = null;
+        signal.exitTimestamp = null;
+        signal.profitLoss = null;
+
+        await this.signalsService.createSignal(signal);
       } else {
         console.log(
           `${symbol}: [handleMacdSignal] Нет сигнала для открытия позиции. MACD малого таймфрейма: ${currentSign}, MACD большого таймфрейма: ${higherTimeframeHistogram.toFixed(6)}`,
@@ -433,220 +442,62 @@ export class TradingBotService implements OnModuleInit {
     }
   }
 
-  // Check if symbol already has an active signal
-  private hasActiveSignal(symbol: string): boolean {
-    return this.activeSignals.some(
-      (signal) => signal.symbol === symbol && signal.active,
-    );
-  }
-
   // Get profit/stop config for current timeframe
   private getProfitStopConfig(): ProfitStopConfig {
     return this.TIMEFRAME_CONFIG[this.INTERVAL] || { profit: 1, stop: 0.6 };
   }
 
-  // Update checkSignalProfit method to use high/low prices
-  private checkSignalProfit(
-    symbol: string,
-    currentPrice: number,
-    highPrice: number,
-    lowPrice: number,
-  ): void {
-    // Find active signals for this symbol
-    const symbolSignals = this.activeSignals.filter(
-      (signal) => signal.symbol === symbol && signal.active,
-    );
-
-    if (!symbolSignals.length) return;
-
-    const config = this.getProfitStopConfig();
-
-    for (const signal of symbolSignals) {
-      let profitPercent = 0;
-      let maxPossibleProfitPercent = 0;
-
-      // Calculate profit based on position type
-      if (signal.type === 'long') {
-        // For long positions, use close price for current profit
-        profitPercent =
-          ((currentPrice - signal.entryPrice) / signal.entryPrice) * 100;
-        // For long positions, use high price for max possible profit
-        maxPossibleProfitPercent =
-          ((highPrice - signal.entryPrice) / signal.entryPrice) * 100;
-      } else if (signal.type === 'short') {
-        // For short positions, use close price for current profit
-        profitPercent =
-          ((signal.entryPrice - currentPrice) / signal.entryPrice) * 100;
-        // For short positions, use low price for max possible profit
-        maxPossibleProfitPercent =
-          ((signal.entryPrice - lowPrice) / signal.entryPrice) * 100;
-      }
-
-      // Update max profit if the max possible profit is higher
-      if (maxPossibleProfitPercent > signal.maxProfit) {
-        signal.maxProfit = maxPossibleProfitPercent;
-      }
-
-      // Send notification if max profit exceeds threshold and hasn't been notified yet
-      if (signal.maxProfit >= config.profit && !signal.notified) {
-        signal.notified = true;
-        signal.status = 'success'; // Mark as success when profit target is hit
-
-        const profitMessage =
-          `${symbol} 💰 Прибыль по сигналу!\n` +
-          `Тип: ${signal.type === 'long' ? 'Лонг' : 'Шорт'}\n` +
-          `Вход: ${signal.entryPrice}\n` +
-          `Текущая цена: ${currentPrice}\n` +
-          `Макс. цена: ${signal.type === 'long' ? highPrice : lowPrice}\n` +
-          `Макс. прибыль: ${signal.maxProfit.toFixed(2)}%\n` +
-          `Текущая прибыль: ${profitPercent.toFixed(2)}%`;
-
-        // Send as reply to original signal
-        this.telegramService.sendReplyNotification(
-          'fix',
-          profitMessage,
-          signal.messageId,
-        );
-      }
-
-      // Close signal if stop reached
-      if (profitPercent <= -config.stop) {
-        signal.active = false;
-        signal.status = 'stopped'; // Mark as stopped when stop loss is hit
-
-        const stopLossMessage =
-          `${symbol} 🔴 Стоп-лосс по сигналу\n` +
-          `Тип: ${signal.type === 'long' ? 'Лонг' : 'Шорт'}\n` +
-          `Вход: ${signal.entryPrice}\n` +
-          `Текущая цена: ${currentPrice}\n` +
-          `Убыток: ${profitPercent.toFixed(2)}%`;
-
-        // Send as reply to original signal
-        this.telegramService.sendReplyNotification(
-          'error',
-          stopLossMessage,
-          signal.messageId,
-        );
-      }
-
-      // Close signal if current profit is negative after reaching profit threshold
-      if (signal.maxProfit >= config.profit && profitPercent < 0) {
-        signal.active = false;
-        signal.status = 'failure'; // Mark as failure when it reverses after hitting profit
-
-        const closedMessage =
-          `${symbol} ⚠️ Сигнал закрыт после разворота\n` +
-          `Тип: ${signal.type === 'long' ? 'Лонг' : 'Шорт'}\n` +
-          `Вход: ${signal.entryPrice}\n` +
-          `Текущая цена: ${currentPrice}\n` +
-          `Макс. прибыль: ${signal.maxProfit.toFixed(2)}%\n` +
-          `Текущая прибыль: ${profitPercent.toFixed(2)}%`;
-
-        // Send as reply to original signal
-        this.telegramService.sendReplyNotification(
-          'info',
-          closedMessage,
-          signal.messageId,
-        );
-      }
-    }
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  private async cleanupOldSignals() {
+    await this.signalsService.cleanupOldSignals(30);
   }
 
-  // Add method to generate daily statistics
-  private generateSignalStatistics(): SignalStats[] {
-    const stats: Record<string, SignalStats> = {};
-    const dayStart = dayjs().startOf('day').valueOf();
-
-    // Consider only signals from the current day
-    const dailySignals = this.activeSignals.filter(
-      (signal) => dayjs(signal.entryTime).valueOf() >= dayStart,
-    );
-
-    // Initialize stats object for each symbol
-    for (const signal of dailySignals) {
-      if (!stats[signal.symbol]) {
-        stats[signal.symbol] = {
-          symbol: signal.symbol,
-          success: 0,
-          failure: 0,
-          stopped: 0,
-          total: 0,
-          successRate: 0,
-          failureRate: 0,
-        };
-      }
-
-      // Count by status
-      stats[signal.symbol].total++;
-
-      if (signal.status === 'success') {
-        stats[signal.symbol].success++;
-      } else if (signal.status === 'failure') {
-        stats[signal.symbol].failure++;
-      } else if (signal.status === 'stopped') {
-        stats[signal.symbol].stopped++;
-      }
-    }
-
-    // Calculate rates
-    Object.values(stats).forEach((stat) => {
-      stat.successRate = stat.total > 0 ? (stat.success / stat.total) * 100 : 0;
-      stat.failureRate = stat.total > 0 ? (stat.failure / stat.total) * 100 : 0;
-    });
-
-    return Object.values(stats);
+  private async generateSignalStatistics(): Promise<SignalStats[]> {
+    const stats = await this.signalsService.getSignalStats();
+    return stats.map(stat => ({
+      symbol: stat.symbol,
+      success: stat.profitable_signals,
+      failure: stat.failure_signals,
+      stopped: 0,
+      total: stat.total_signals,
+      successRate: (stat.profitable_signals / stat.total_signals) * 100,
+      failureRate: (stat.failure_signals / stat.total_signals) * 100,
+    }));
   }
 
-  // Add method to send daily report at end of day
-  @Cron('0 0 23 * * *') // Run at 23:00 every day
   private async sendDailyReport() {
     try {
-      const stats = this.generateSignalStatistics();
+      const stats = await this.generateSignalStatistics();
 
       if (stats.length === 0) {
         await this.telegramService.sendNotification(
           'info',
-          'Ежедневный отчет: нет сигналов за сегодня\\.',
+          'За сегодня не было сгенерировано сигналов.',
         );
         return;
       }
 
-      // Sort by success rate for finding best/worst performers
-      const sortedBySuccessRate = [...stats].sort(
-        (a, b) => b.successRate - a.successRate,
+      let reportMessage = '📊 Ежедневный отчет по сигналам:\n\n';
+
+      // Calculate overall statistics
+      const totalSignals = stats.reduce((sum, stat) => sum + stat.total, 0);
+      const totalSuccess = stats.reduce((sum, stat) => sum + stat.success, 0);
+      const totalFailure = stats.reduce((sum, stat) => sum + stat.failure, 0);
+      const overallSuccessRate = (totalSuccess / totalSignals) * 100;
+      const overallFailureRate = (totalFailure / totalSignals) * 100;
+
+      reportMessage += `📈 Общая статистика:\n`;
+      reportMessage += `Всего сигналов: ${totalSignals}\n`;
+      reportMessage += `Успешных: ${totalSuccess} (${overallSuccessRate.toFixed(2)}%)\n`;
+      reportMessage += `Неудачных: ${totalFailure} (${overallFailureRate.toFixed(2)}%)\n\n`;
+
+      // Find best and worst performing symbols
+      const bestSymbol = stats.reduce((best, current) => 
+        current.successRate > best.successRate ? current : best
       );
-      const sortedByFailureRate = [...stats].sort(
-        (a, b) => b.failureRate - a.failureRate,
+      const worstSymbol = stats.reduce((worst, current) => 
+        current.successRate < worst.successRate ? current : worst
       );
-
-      // Best and worst performers with null checks
-      const bestSymbol =
-        sortedBySuccessRate.length > 0 ? sortedBySuccessRate[0] : null;
-      const worstSymbol =
-        sortedBySuccessRate.length > 0
-          ? sortedBySuccessRate[sortedBySuccessRate.length - 1]
-          : null;
-      const highestFailureSymbol =
-        sortedByFailureRate.length > 0 ? sortedByFailureRate[0] : null;
-      const lowestFailureSymbol =
-        sortedByFailureRate.length > 0
-          ? sortedByFailureRate[sortedByFailureRate.length - 1]
-          : null;
-
-      // Build report message with MarkdownV2 formatting
-      // Note: In MarkdownV2, special characters must be escaped with a backslash: _*[]()~`>#+-=|{}.!
-      let reportMessage = '📊 *Ежедневный отчет по сигналам* 📊\n\n';
-
-      reportMessage += '*Статистика по символам:*\n';
-      stats.forEach((stat) => {
-        const escapedSymbol = stat.symbol.replace(
-          /([_*[\]()~`>#+=|{}.!])/g,
-          '\\$1',
-        );
-        reportMessage += `${escapedSymbol}: ✅ ${stat.success}, ❌ ${stat.failure}, 🛑 ${stat.stopped} \\(Всего: ${stat.total}\\)\n`;
-      });
-
-      reportMessage += '\n*Лучшие и худшие результаты:*\n';
 
       if (bestSymbol) {
         const escapedSymbol = bestSymbol.symbol.replace(
@@ -657,7 +508,7 @@ export class TradingBotService implements OnModuleInit {
           typeof bestSymbol.successRate === 'number'
             ? bestSymbol.successRate
             : 0;
-        reportMessage += `✅ Наибольший % успеха: ${escapedSymbol} \\(${successRate.toFixed(2)}%\\)\n`;
+        reportMessage += `✅ Наилучший % успеха: ${escapedSymbol} \\(${successRate.toFixed(2)}%\\)\n`;
       }
 
       if (worstSymbol) {
@@ -672,30 +523,6 @@ export class TradingBotService implements OnModuleInit {
         reportMessage += `✅ Наименьший % успеха: ${escapedSymbol} \\(${successRate.toFixed(2)}%\\)\n`;
       }
 
-      if (highestFailureSymbol) {
-        const escapedSymbol = highestFailureSymbol.symbol.replace(
-          /([_*[\]()~`>#+=|{}.!])/g,
-          '\\$1',
-        );
-        const failureRate =
-          typeof highestFailureSymbol.failureRate === 'number'
-            ? highestFailureSymbol.failureRate
-            : 0;
-        reportMessage += `❌ Наибольший % неудач: ${escapedSymbol} \\(${failureRate.toFixed(2)}%\\)\n`;
-      }
-
-      if (lowestFailureSymbol) {
-        const escapedSymbol = lowestFailureSymbol.symbol.replace(
-          /([_*[\]()~`>#+=|{}.!])/g,
-          '\\$1',
-        );
-        const failureRate =
-          typeof lowestFailureSymbol.failureRate === 'number'
-            ? lowestFailureSymbol.failureRate
-            : 0;
-        reportMessage += `❌ Наименьший % неудач: ${escapedSymbol} \\(${failureRate.toFixed(2)}%\\)\n`;
-      }
-
       await this.telegramService.sendNotification('info', reportMessage);
     } catch (error) {
       await this.telegramService.sendNotification(
@@ -703,20 +530,5 @@ export class TradingBotService implements OnModuleInit {
         `Ошибка при генерации ежедневного отчета: ${error instanceof Error ? error.message.replace(/([_*[\]()~`>#+=|{}.!])/g, '\\$1') : String(error).replace(/([_*[\]()~`>#+=|{}.!])/g, '\\$1')}`,
       );
     }
-  }
-
-  // Add cleanup method to prevent memory leaks
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
-  private cleanupOldSignals() {
-    // Keep only active signals or signals created in the last 7 days
-    const sevenDaysAgo = dayjs().subtract(7, 'day').valueOf();
-    this.activeSignals = this.activeSignals.filter((signal) => {
-      return signal.active || dayjs(signal.entryTime).valueOf() > sevenDaysAgo;
-    });
-
-    this.telegramService.sendNotification(
-      'info',
-      `Очистка старых сигналов завершена. Активных сигналов: ${this.activeSignals.filter((s) => s.active).length}`,
-    );
   }
 }
