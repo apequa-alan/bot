@@ -10,7 +10,7 @@ import {
   SymbolData,
   WsKlineV5,
   SignalStats,
-  ProfitStopConfig,
+  TimeframeConfig,
 } from './types';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SignalsService } from '../signals/signals.service';
@@ -25,22 +25,22 @@ export class TradingBotService implements OnModuleInit {
   private readonly TOP_VOLUME_COINS_COUNT = 10;
   private readonly ONE_HISTOGRAM_DIRECTION_CANDLES = 5;
 
-  // Configure profit and stop limit values for each timeframe
+  // Configure profit and validity hours for each timeframe
   private readonly TIMEFRAME_CONFIG: Partial<
-    Record<KlineIntervalV3, ProfitStopConfig>
+    Record<KlineIntervalV3, TimeframeConfig>
   > = {
-    '1': { profit: 0.6, stop: 0.4 },
-    '3': { profit: 0.8, stop: 0.65 },
-    '5': { profit: 1, stop: 1 },
-    '15': { profit: 1.5, stop: 0.9 },
-    '30': { profit: 2, stop: 1.2 },
-    '60': { profit: 2.5, stop: 1.5 },
-    '120': { profit: 3, stop: 1.8 },
-    '240': { profit: 3.5, stop: 2 },
-    '360': { profit: 4, stop: 2.5 },
-    D: { profit: 5, stop: 3 },
-    W: { profit: 8, stop: 5 },
-    M: { profit: 10, stop: 6 },
+    '1': { profit: 0.6, validityHours: 2 },
+    '3': { profit: 0.8, validityHours: 4 },
+    '5': { profit: 1, validityHours: 6 },
+    '15': { profit: 1.5, validityHours: 8 },
+    '30': { profit: 2, validityHours: 12 },
+    '60': { profit: 2.5, validityHours: 24 },
+    '120': { profit: 3, validityHours: 36 },
+    '240': { profit: 3.5, validityHours: 48 },
+    '360': { profit: 4, validityHours: 72 },
+    D: { profit: 5, validityHours: 96 },
+    W: { profit: 8, validityHours: 168 },
+    M: { profit: 10, validityHours: 720 },
   };
 
   private readonly BYBIT_API_KEY: string;
@@ -220,7 +220,7 @@ export class TradingBotService implements OnModuleInit {
           currentPrice: close,
           highPrice: high,
           lowPrice: low,
-          profitConfig: this.getProfitStopConfig(),
+          profitConfig: this.getProfitConfig(),
          }
         );
 
@@ -408,11 +408,11 @@ export class TradingBotService implements OnModuleInit {
       if (isLongSignal || isShortSignal) {
         const currentPrice = parseFloat(currentClosePrice);
         const currentTime = symbolData.candles[symbolData.candles.length - 1].startTime;
-        const config = this.getProfitStopConfig();
+        const config = this.getProfitConfig();
 
         const signalMessage = `${symbol} ${isLongSignal ? '📈 Сигнал на открытие лонга' : '📉 Сигнал на открытие шорта'}\n` +
           `Цена: ${parseNumber(Number(currentClosePrice))}\n` +
-          `TP: ${config.profit}%, SL: ${config.stop}%`;
+          `TP: ${config.profit}%`
 
         const messageId = await this.telegramService.sendNotification('info', signalMessage);
 
@@ -426,12 +426,12 @@ export class TradingBotService implements OnModuleInit {
         signal.notified = false;
         signal.messageId = messageId;
         signal.status = 'active';
-        signal.stopLoss = currentPrice * (1 - config.stop / 100);
         signal.takeProfit = currentPrice * (1 + config.profit / 100);
         signal.timestamp = Date.now();
         signal.exitPrice = null;
         signal.exitTimestamp = null;
         signal.profitLoss = null;
+        signal.validityHours = config.validityHours;
 
         await this.signalsService.createSignal(signal);
       } else {
@@ -442,9 +442,9 @@ export class TradingBotService implements OnModuleInit {
     }
   }
 
-  // Get profit/stop config for current timeframe
-  private getProfitStopConfig(): ProfitStopConfig {
-    return this.TIMEFRAME_CONFIG[this.INTERVAL] || { profit: 1, stop: 0.6 };
+  // Get profit/validity config for current timeframe
+  private getProfitConfig(): { profit: number; validityHours: number } {
+    return this.TIMEFRAME_CONFIG[this.INTERVAL] || { profit: 1, validityHours: 24 };
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)

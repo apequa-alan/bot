@@ -15,7 +15,7 @@ import { Signal } from './signals/entities/signal.entity';
       type: 'sqlite',
       database: 'signals.db',
       entities: [Signal],
-      synchronize: true,
+      synchronize: false,
     }),
     ScheduleModule.forRoot(),
     TradingBotModule,

@@ -15,9 +15,6 @@ export class Signal {
   entryPrice: number;
 
   @Column('float')
-  stopLoss: number;
-
-  @Column('float')
   takeProfit: number;
 
   @Column('bigint')
@@ -49,4 +46,7 @@ export class Signal {
 
   @Column()
   messageId: number;
+
+  @Column('int', { nullable: true })
+  validityHours: number;
 } 

@@ -67,10 +67,10 @@ export class SignalsService {
   async checkSignalProfit(
     {symbol, currentPrice, highPrice, lowPrice, profitConfig}: {
       symbol: string,
-    currentPrice: number,
-    highPrice: number,
-    lowPrice: number,
-    profitConfig: { profit: number; stop: number },
+      currentPrice: number,
+      highPrice: number,
+      lowPrice: number,
+      profitConfig: { profit: number; validityHours: number },
     }
   ): Promise<void> {
     const activeSignals = await this.getActiveSignals();
@@ -96,13 +96,11 @@ export class SignalsService {
         signal.maxProfit = maxPossibleProfitPercent;
       }
 
-      // Check if stop loss was hit in this candle
-      const stopLossHit = signal.type === 'long' 
-        ? lowPrice <= signal.stopLoss 
-        : highPrice >= signal.stopLoss;
+      // Check if signal has expired based on validity hours
+      const signalAge = (Date.now() - signal.timestamp) / (1000 * 60 * 60); // Convert to hours
+      const isExpired = signalAge >= signal.validityHours;
 
-      console.log(signal, currentPrice, stopLossHit, lowPrice, highPrice, 'signal, currentPrice, stopLossHit, lowPrice, highPrice');
-      if (stopLossHit && !signal.notified) {
+      if (isExpired && !signal.notified) {
         signal.notified = true;
         await this.updateSignalStatus(
           symbol,
