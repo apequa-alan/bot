@@ -5,6 +5,7 @@ import { Telegraf } from 'telegraf';
 import {
   formatErrorForMarkdown,
   formatHeaderForMarkdown,
+  escapeMarkdownV2,
 } from './telegram.utils';
 
 @Injectable()
@@ -45,12 +46,12 @@ export class TelegramService implements OnModuleInit {
     }
 
     try {
-      // Message is already formatted with MarkdownV2, just add prefix
-      const fullMessage = prefix + message;
-      console.log(`[TELEGRAM] ${fullMessage}`);
+      // Escape the entire message including prefix before sending
+      const escapedMessage = escapeMarkdownV2(prefix + message);
+      console.log(`[TELEGRAM] ${message}`); // Log original message for debugging
       const result = await this.bot.telegram.sendMessage(
         this.channelId,
-        fullMessage,
+        escapedMessage,
         { parse_mode: 'MarkdownV2' },
       );
       return result.message_id;
@@ -58,10 +59,11 @@ export class TelegramService implements OnModuleInit {
       console.error('Ошибка отправки уведомления в Telegram:', err);
       // If message formatting fails, try sending without markdown
       try {
+        const fallbackMessage = prefix + 'Ошибка форматирования сообщения. Отправка без форматирования.';
         const result = await this.bot.telegram.sendMessage(
           this.channelId,
-          prefix + 'Ошибка форматирования сообщения\\. Отправка без форматирования\\.',
-          { parse_mode: 'MarkdownV2' },
+          fallbackMessage,
+          { parse_mode: undefined },
         );
         return result.message_id;
       } catch (fallbackErr) {
@@ -90,14 +92,12 @@ export class TelegramService implements OnModuleInit {
     }
 
     try {
-      // Message is already formatted with MarkdownV2, just add prefix
-      const fullMessage = prefix + message;
-      console.log(
-        `[TELEGRAM] Reply to ${replyToMessageId}: ${fullMessage}`,
-      );
+      // Escape the entire message including prefix before sending
+      const escapedMessage = escapeMarkdownV2(prefix + message);
+      console.log(`[TELEGRAM] Reply to ${replyToMessageId}: ${message}`); // Log original message
       const result = await this.bot.telegram.sendMessage(
         this.channelId,
-        fullMessage,
+        escapedMessage,
         {
           reply_to_message_id: replyToMessageId,
           allow_sending_without_reply: true,
@@ -136,7 +136,9 @@ export class TelegramService implements OnModuleInit {
    * @returns Message ID
    */
   async sendInfoNotification(header: string, content: string): Promise<number> {
-    const message = `${formatHeaderForMarkdown(header)}\n${content}`;
+    // Format header and content without escaping
+    const formattedHeader = formatHeaderForMarkdown(header);
+    const message = `${formattedHeader}\n${content}`;
     return this.sendNotification('info', message);
   }
 }

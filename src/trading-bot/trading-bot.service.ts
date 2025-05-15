@@ -18,7 +18,6 @@ import {
   formatNumberForMarkdown,
   formatPercentageForMarkdown,
   formatSymbolForMarkdown,
-  formatSymbolsListForMarkdown,
   formatHeaderForMarkdown,
 } from '../telegram/telegram.utils';
 
@@ -112,10 +111,7 @@ export class TradingBotService implements OnModuleInit {
         this.TOP_VOLUME_COINS_COUNT,
       );
       if (newTopCoins.length === 0) {
-        this.telegramService.sendNotification(
-          'error',
-          'Не удалось получить новый список монет для отслеживания',
-        );
+        console.error('Не удалось получить новый список монет для отслеживания');
         return;
       }
 
@@ -155,18 +151,12 @@ export class TradingBotService implements OnModuleInit {
         console.log(`Начато отслеживание ${symbol}`);
       }
 
-      const addedCoins = formatSymbolsListForMarkdown(coinsToAdd);
-      const removedCoins = formatSymbolsListForMarkdown(coinsToRemove);
-
-      const updateContent = `Добавлены: ${addedCoins}\n` +
-        `Удалены: ${removedCoins}`;
-
-      await this.telegramService.sendInfoNotification(
-        'Обновлен список отслеживаемых монет',
-        updateContent
-      );
+      // Log changes to console only
+      console.log('Обновлен список отслеживаемых монет:');
+      console.log('Добавлены:', coinsToAdd);
+      console.log('Удалены:', coinsToRemove);
     } catch (error) {
-      await this.telegramService.sendErrorNotification(error, 'Ошибка при обновлении списка монет');
+      console.error('Ошибка при обновлении списка монет:', error);
     }
   }
 
@@ -250,10 +240,6 @@ export class TradingBotService implements OnModuleInit {
           Number(this.SLOW_PERIOD),
           Number(this.SIGNAL_PERIOD),
         );
-        console.log('symbol', symbol);
-        console.log(JSON.stringify(closingPrices.reverse()));
-        console.log(JSON.stringify(histogram));
-        console.log('symbol END ======', symbol);
 
         if (histogram.length) {
           const latestHist = histogram[histogram.length - 1];
@@ -434,6 +420,8 @@ export class TradingBotService implements OnModuleInit {
         const formattedPrice = formatNumberForMarkdown(Number(currentClosePrice));
         const formattedTP = formatPercentageForMarkdown(config.profit);
 
+        console.log(config, 'config');
+        
         const signalContent = `${formattedSymbol} ${signalType}\n` +
           `Цена: ${formattedPrice}\n` +
           `TP: ${formattedTP}\n`;

@@ -5,6 +5,7 @@ import { TelegramService } from '../telegram/telegram.service';
 import { calculateSmoothedSMA } from '../trading-bot/utils/sma.utils';
 import * as dayjs from 'dayjs';
 import { Candle } from '../trading-bot/types';
+import { formatSymbolForMarkdown } from '../telegram/telegram.utils';
 
 @Injectable()
 export class BybitService {
@@ -37,32 +38,20 @@ export class BybitService {
 
       if (!response || !response.result?.list) {
         console.error('Некорректный ответ от Bybit при получении списка монет');
-        await this.telegramService.sendNotification(
-          'error',
-          'Некорректный ответ от Bybit при получении списка монет.',
-        );
         return [];
       }
 
-      // Сортируем монеты по объему и берем топ-N
+      // Filter out symbols with numbers and sort by volume
       const sortedCoins = response.result.list
+        .filter(coin => !/\d/.test(coin.symbol)) // Filter out symbols with numbers
         .sort((a, b) => parseFloat(b.volume24h) - parseFloat(a.volume24h))
         .slice(0, topCount)
         .map((coin) => `${coin.symbol}T`);
 
       console.log(`Топ ${topCount} монет по объему:`, sortedCoins);
-      await this.telegramService.sendNotification(
-        'info',
-        `Топ ${topCount} монет по объему:\n${sortedCoins.join('\n')}`,
-      );
-
       return sortedCoins;
     } catch (error) {
       console.error('Ошибка при получении списка монет', error);
-      await this.telegramService.sendNotification(
-        'error',
-        `Ошибка при получении списка монет: ${error}`,
-      );
       return [];
     }
   }
@@ -86,7 +75,7 @@ export class BybitService {
         );
         await this.telegramService.sendNotification(
           'error',
-          `Некорректный ответ от Bybit при получении свечей для ${symbol}.`,
+          `Некорректный ответ от Bybit при получении свечей для ${formatSymbolForMarkdown(symbol)}\.`,
         );
         return { candles: [], smoothedSMA: null };
       }
@@ -117,7 +106,7 @@ export class BybitService {
       console.error(`Ошибка при запросе свечей для ${symbol}`, error);
       await this.telegramService.sendNotification(
         'error',
-        `Ошибка при запросе свечей для ${symbol}: ${error}`,
+        `Ошибка при запросе свечей для ${formatSymbolForMarkdown(symbol)}: ${error}`,
       );
       return { candles: [], smoothedSMA: null };
     }
