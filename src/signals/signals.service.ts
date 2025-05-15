@@ -41,14 +41,6 @@ export class SignalsService {
         `Доходность: ${profitLoss.toFixed(2)}%`,
         signal.messageId,
       );
-    } else if (status === 'failure') {
-      await this.telegramService.sendReplyNotification(
-        'error',
-        `${symbol} Отмена по сигналу\n` +
-          `Текущая цена: ${currentPrice}\n` +
-          `Потери: ${profitLoss.toFixed(2)}%`,
-        signal.messageId,
-      );
     }
   }
 

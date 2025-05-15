@@ -2,6 +2,10 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectBot } from 'nestjs-telegraf';
 import { Telegraf } from 'telegraf';
+import {
+  formatErrorForMarkdown,
+  formatHeaderForMarkdown,
+} from './telegram.utils';
 
 @Injectable()
 export class TelegramService implements OnModuleInit {
@@ -23,16 +27,6 @@ export class TelegramService implements OnModuleInit {
     });
   }
 
-  /**
-   * Escapes special characters for Telegram's MarkdownV2 format
-   * @param text The text to escape
-   * @returns Escaped text safe for MarkdownV2
-   */
-  private escapeMarkdown(text: string): string {
-    // Characters that need to be escaped in MarkdownV2: _*[]()~`>#+-=|{}.!
-    return text.replace(/([_*[\]()~`>#+=|{}.!\\])/g, '\\$1');
-  }
-
   async sendNotification(
     type: 'error' | 'info' | 'fix',
     message: string,
@@ -51,17 +45,29 @@ export class TelegramService implements OnModuleInit {
     }
 
     try {
-      const fullMessage = this.escapeMarkdown(prefix + message);
-      console.log(`[TELEGRAM] ${prefix + message}`);
+      // Message is already formatted with MarkdownV2, just add prefix
+      const fullMessage = prefix + message;
+      console.log(`[TELEGRAM] ${fullMessage}`);
       const result = await this.bot.telegram.sendMessage(
         this.channelId,
         fullMessage,
         { parse_mode: 'MarkdownV2' },
       );
-      return result.message_id; // Return the message ID for future replies
+      return result.message_id;
     } catch (err) {
       console.error('Ошибка отправки уведомления в Telegram:', err);
-      return 0;
+      // If message formatting fails, try sending without markdown
+      try {
+        const result = await this.bot.telegram.sendMessage(
+          this.channelId,
+          prefix + 'Ошибка форматирования сообщения\\. Отправка без форматирования\\.',
+          { parse_mode: 'MarkdownV2' },
+        );
+        return result.message_id;
+      } catch (fallbackErr) {
+        console.error('Ошибка отправки fallback сообщения:', fallbackErr);
+        return 0;
+      }
     }
   }
 
@@ -84,9 +90,10 @@ export class TelegramService implements OnModuleInit {
     }
 
     try {
-      const fullMessage = this.escapeMarkdown(prefix + message);
+      // Message is already formatted with MarkdownV2, just add prefix
+      const fullMessage = prefix + message;
       console.log(
-        `[TELEGRAM] Reply to ${replyToMessageId}: ${prefix + message}`,
+        `[TELEGRAM] Reply to ${replyToMessageId}: ${fullMessage}`,
       );
       const result = await this.bot.telegram.sendMessage(
         this.channelId,
@@ -106,5 +113,30 @@ export class TelegramService implements OnModuleInit {
       // Fallback to regular message if reply fails
       return this.sendNotification(type, message);
     }
+  }
+
+  /**
+   * Formats and sends an error notification
+   * @param error The error to send
+   * @param context Optional context message
+   * @returns Message ID
+   */
+  async sendErrorNotification(error: unknown, context?: string): Promise<number> {
+    const errorMessage = formatErrorForMarkdown(error);
+    const message = context 
+      ? `${formatHeaderForMarkdown(context)}\n${errorMessage}`
+      : errorMessage;
+    return this.sendNotification('error', message);
+  }
+
+  /**
+   * Formats and sends an info notification with a header
+   * @param header The header text
+   * @param content The content text
+   * @returns Message ID
+   */
+  async sendInfoNotification(header: string, content: string): Promise<number> {
+    const message = `${formatHeaderForMarkdown(header)}\n${content}`;
+    return this.sendNotification('info', message);
   }
 }

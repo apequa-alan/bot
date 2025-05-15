@@ -9,15 +9,21 @@ import { calculateSmoothedSMA } from './utils/sma.utils';
 import {
   SymbolData,
   WsKlineV5,
-  SignalStats,
   TimeframeConfig,
 } from './types';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SignalsService } from '../signals/signals.service';
-import { parseNumber } from '../utils/number';
 import { Signal } from '../signals/entities/signal.entity';
+import {
+  formatNumberForMarkdown,
+  formatPercentageForMarkdown,
+  formatSymbolForMarkdown,
+  formatSymbolsListForMarkdown,
+  formatHeaderForMarkdown,
+} from '../telegram/telegram.utils';
 
 const limit = 300;
+
 @Injectable()
 export class TradingBotService implements OnModuleInit {
   private ws: WebsocketClient;
@@ -29,15 +35,15 @@ export class TradingBotService implements OnModuleInit {
   private readonly TIMEFRAME_CONFIG: Partial<
     Record<KlineIntervalV3, TimeframeConfig>
   > = {
-    '1': { profit: 0.6, validityHours: 2 },
-    '3': { profit: 0.8, validityHours: 4 },
-    '5': { profit: 1, validityHours: 6 },
-    '15': { profit: 1.5, validityHours: 8 },
-    '30': { profit: 2, validityHours: 12 },
-    '60': { profit: 2.5, validityHours: 24 },
-    '120': { profit: 3, validityHours: 36 },
-    '240': { profit: 3.5, validityHours: 48 },
-    '360': { profit: 4, validityHours: 72 },
+    '1': { profit: 0.6, validityHours: 1 },
+    '3': { profit: 0.8, validityHours: 1 },
+    '5': { profit: 1, validityHours: 1 },
+    '15': { profit: 1.5, validityHours: 2 },
+    '30': { profit: 2, validityHours: 2 },
+    '60': { profit: 2.5, validityHours: 4 },
+    '120': { profit: 3, validityHours: 8 },
+    '240': { profit: 3.5, validityHours: 16 },
+    '360': { profit: 4, validityHours: 32 },
     D: { profit: 5, validityHours: 96 },
     W: { profit: 8, validityHours: 168 },
     M: { profit: 10, validityHours: 720 },
@@ -149,17 +155,18 @@ export class TradingBotService implements OnModuleInit {
         console.log(`Начато отслеживание ${symbol}`);
       }
 
-      await this.telegramService.sendNotification(
-        'info',
-        `Обновлен список отслеживаемых монет:\n` +
-          `Добавлены: ${coinsToAdd.join(', ') || 'нет'}\n` +
-          `Удалены: ${coinsToRemove.join(', ') || 'нет'}`,
+      const addedCoins = formatSymbolsListForMarkdown(coinsToAdd);
+      const removedCoins = formatSymbolsListForMarkdown(coinsToRemove);
+
+      const updateContent = `Добавлены: ${addedCoins}\n` +
+        `Удалены: ${removedCoins}`;
+
+      await this.telegramService.sendInfoNotification(
+        'Обновлен список отслеживаемых монет',
+        updateContent
       );
     } catch (error) {
-      await this.telegramService.sendNotification(
-        'error',
-        `Ошибка при обновлении списка монет: ${error}`,
-      );
+      await this.telegramService.sendErrorNotification(error, 'Ошибка при обновлении списка монет');
     }
   }
 
@@ -292,15 +299,12 @@ export class TradingBotService implements OnModuleInit {
         }
       });
 
-      this.telegramService.sendNotification(
-        'info',
-        'Бот запущен и ожидает новые свечи.',
+      await this.telegramService.sendInfoNotification(
+        'Статус бота',
+        'Бот запущен и ожидает новые свечи\\.'
       );
     } catch (error) {
-      this.telegramService.sendNotification(
-        'error',
-        `Ошибка при запуске бота: ${error}`,
-      );
+      await this.telegramService.sendErrorNotification(error, 'Ошибка при запуске бота');
     }
   }
 
@@ -323,6 +327,8 @@ export class TradingBotService implements OnModuleInit {
     const currentHistogramAbs = Math.abs(histogramValue);
     const currentSign = Math.sign(histogramValue);
 
+    console.log(`${symbol}: [handleMacdSignal] Current histogram value: ${histogramValue.toFixed(6)}, sign: ${currentSign}`);
+
     if (macdHistogram.length < this.ONE_HISTOGRAM_DIRECTION_CANDLES) {
       console.log(
         `${symbol}: [handleMacdSignal] Недостаточно свечей для проверки MACD направления. Требуется минимум ${this.ONE_HISTOGRAM_DIRECTION_CANDLES} свечей.`,
@@ -335,6 +341,7 @@ export class TradingBotService implements OnModuleInit {
     const allSame = lastCandles.every(
       (value) => Math.sign(value) === currentSign,
     );
+    console.log(`${symbol}: [handleMacdSignal] Last ${this.ONE_HISTOGRAM_DIRECTION_CANDLES} candles signs:`, lastCandles.map(v => Math.sign(v)));
     if (!allSame) {
       console.log(
         `${symbol}: [handleMacdSignal] Последние ${this.ONE_HISTOGRAM_DIRECTION_CANDLES} свечей не подтверждают единое направление MACD.`,
@@ -345,7 +352,7 @@ export class TradingBotService implements OnModuleInit {
     // Проверяем ослабление сигнала: если абсолютное значение MACD не снизилось
     if (currentHistogramAbs >= symbolData.prevHistogramAbs) {
       console.log(
-        `${symbol}: [handleMacdSignal] Абсолютное значение MACD не снизилось.`,
+        `${symbol}: [handleMacdSignal] Абсолютное значение MACD не снизилось. Current: ${currentHistogramAbs.toFixed(6)}, Previous: ${symbolData.prevHistogramAbs.toFixed(6)}`,
       );
       symbolData.prevHistogramAbs = currentHistogramAbs;
       return;
@@ -392,6 +399,13 @@ export class TradingBotService implements OnModuleInit {
         Math.abs(higherTimeframeHistogram) <
         Math.abs(higherTimeframePrevHistogram);
 
+      console.log(`${symbol}: [handleMacdSignal] Higher timeframe analysis:
+        Current histogram: ${higherTimeframeHistogram.toFixed(6)}
+        Previous histogram: ${higherTimeframePrevHistogram.toFixed(6)}
+        Started to down: ${higherTimeframeAbsStartedToDown}
+        Current sign: ${currentSign}
+        Higher timeframe sign: ${Math.sign(higherTimeframeHistogram)}`);
+
       const isShortSignal =
         histogramValue > 0 &&
         (higherTimeframeHistogram < 0 ||
@@ -402,6 +416,11 @@ export class TradingBotService implements OnModuleInit {
         (higherTimeframeHistogram > 0 ||
           (higherTimeframeHistogram < 0 && higherTimeframeAbsStartedToDown));
 
+      console.log(`${symbol}: [handleMacdSignal] Signal conditions:
+        Is short signal: ${isShortSignal}
+        Is long signal: ${isLongSignal}
+        Can open position by volume: ${canOpenPositionByVolume}`);
+
       const { closePrice: currentClosePrice } =
         symbolData.candles[symbolData.candles.length - 1];
 
@@ -410,11 +429,19 @@ export class TradingBotService implements OnModuleInit {
         const currentTime = symbolData.candles[symbolData.candles.length - 1].startTime;
         const config = this.getProfitConfig();
 
-        const signalMessage = `${symbol} ${isLongSignal ? '📈 Сигнал на открытие лонга' : '📉 Сигнал на открытие шорта'}\n` +
-          `Цена: ${parseNumber(Number(currentClosePrice))}\n` +
-          `TP: ${config.profit}%`
+        const signalType = isLongSignal ? '📈 Сигнал на открытие лонга' : '📉 Сигнал на открытие шорта';
+        const formattedSymbol = formatSymbolForMarkdown(symbol);
+        const formattedPrice = formatNumberForMarkdown(Number(currentClosePrice));
+        const formattedTP = formatPercentageForMarkdown(config.profit);
 
-        const messageId = await this.telegramService.sendNotification('info', signalMessage);
+        const signalContent = `${formattedSymbol} ${signalType}\n` +
+          `Цена: ${formattedPrice}\n` +
+          `TP: ${formattedTP}\n`;
+
+        const messageId = await this.telegramService.sendInfoNotification(
+          'Новый торговый сигнал',
+          signalContent
+        );
 
         const signal = new Signal();
         signal.symbol = symbol;
@@ -449,85 +476,44 @@ export class TradingBotService implements OnModuleInit {
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   private async cleanupOldSignals() {
-    await this.signalsService.cleanupOldSignals(30);
-  }
-
-  private async generateSignalStatistics(): Promise<SignalStats[]> {
-    const stats = await this.signalsService.getSignalStats();
-    return stats.map(stat => ({
-      symbol: stat.symbol,
-      success: stat.profitable_signals,
-      failure: stat.failure_signals,
-      stopped: 0,
-      total: stat.total_signals,
-      successRate: (stat.profitable_signals / stat.total_signals) * 100,
-      failureRate: (stat.failure_signals / stat.total_signals) * 100,
-    }));
-  }
-
-  private async sendDailyReport() {
     try {
-      const stats = await this.generateSignalStatistics();
-
-      if (stats.length === 0) {
-        await this.telegramService.sendNotification(
-          'info',
-          'За сегодня не было сгенерировано сигналов.',
-        );
-        return;
-      }
-
-      let reportMessage = '📊 Ежедневный отчет по сигналам:\n\n';
-
+      // Get signal statistics
+      const stats = await this.signalsService.getSignalStats();
+      
+      // Format the daily report
+      const reportHeader = formatHeaderForMarkdown('📊 Ежедневный отчет по сигналам');
+      let reportContent = '';
+      
       // Calculate overall statistics
-      const totalSignals = stats.reduce((sum, stat) => sum + stat.total, 0);
-      const totalSuccess = stats.reduce((sum, stat) => sum + stat.success, 0);
-      const totalFailure = stats.reduce((sum, stat) => sum + stat.failure, 0);
-      const overallSuccessRate = (totalSuccess / totalSignals) * 100;
-      const overallFailureRate = (totalFailure / totalSignals) * 100;
-
-      reportMessage += `📈 Общая статистика:\n`;
-      reportMessage += `Всего сигналов: ${totalSignals}\n`;
-      reportMessage += `Успешных: ${totalSuccess} (${overallSuccessRate.toFixed(2)}%)\n`;
-      reportMessage += `Неудачных: ${totalFailure} (${overallFailureRate.toFixed(2)}%)\n\n`;
-
-      // Find best and worst performing symbols
-      const bestSymbol = stats.reduce((best, current) => 
-        current.successRate > best.successRate ? current : best
-      );
-      const worstSymbol = stats.reduce((worst, current) => 
-        current.successRate < worst.successRate ? current : worst
-      );
-
-      if (bestSymbol) {
-        const escapedSymbol = bestSymbol.symbol.replace(
-          /([_*[\]()~`>#+=|{}.!])/g,
-          '\\$1',
-        );
-        const successRate =
-          typeof bestSymbol.successRate === 'number'
-            ? bestSymbol.successRate
-            : 0;
-        reportMessage += `✅ Наилучший % успеха: ${escapedSymbol} \\(${successRate.toFixed(2)}%\\)\n`;
+      let totalSignals = 0;
+      let totalProfitable = 0;
+      
+      for (const stat of stats) {
+        totalSignals += Number(stat.total_signals);
+        totalProfitable += Number(stat.profitable_signals);
       }
-
-      if (worstSymbol) {
-        const escapedSymbol = worstSymbol.symbol.replace(
-          /([_*[\]()~`>#+=|{}.!])/g,
-          '\\$1',
-        );
-        const successRate =
-          typeof worstSymbol.successRate === 'number'
-            ? worstSymbol.successRate
-            : 0;
-        reportMessage += `✅ Наименьший % успеха: ${escapedSymbol} \\(${successRate.toFixed(2)}%\\)\n`;
-      }
-
-      await this.telegramService.sendNotification('info', reportMessage);
+      
+      const overallSuccessRate = totalSignals > 0 ? (totalProfitable / totalSignals * 100).toFixed(2) : '0.00';
+      
+      // Add overall statistics to report
+      reportContent += `Общая статистика:\n` +
+        `Всего сигналов: ${totalSignals}\n` +
+        `Успешных: ${totalProfitable}\n` +
+        `Процент успеха: ${overallSuccessRate}%\n`;
+      
+      // Send the report
+      await this.telegramService.sendInfoNotification(
+        reportHeader,
+        reportContent
+      );
+      
+      // Cleanup old signals (keep last 30 days)
+      await this.signalsService.cleanupOldSignals(30);
+      
     } catch (error) {
-      await this.telegramService.sendNotification(
-        'error',
-        `Ошибка при генерации ежедневного отчета: ${error instanceof Error ? error.message.replace(/([_*[\]()~`>#+=|{}.!])/g, '\\$1') : String(error).replace(/([_*[\]()~`>#+=|{}.!])/g, '\\$1')}`,
+      await this.telegramService.sendErrorNotification(
+        error,
+        'Ошибка при формировании ежедневного отчета'
       );
     }
   }
