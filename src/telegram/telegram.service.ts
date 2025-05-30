@@ -72,10 +72,13 @@ export class TelegramService implements OnModuleInit {
   private async handleHelpCommand(ctx: Context): Promise<void> {
     try {
       const helpMessage = this.formatHelpMessage();
-      await ctx.reply(helpMessage, { parse_mode: 'Markdown' });
+      await ctx.reply(helpMessage, { 
+        parse_mode: 'Markdown',
+        ...this.mainKeyboard
+      });
     } catch (error) {
       console.error('Error handling help command:', error);
-      await ctx.reply('Произошла ошибка при отображении справки');
+      await ctx.reply('Произошла ошибка при отображении справки', this.mainKeyboard);
     }
   }
 
@@ -145,7 +148,8 @@ export class TelegramService implements OnModuleInit {
 
       await ctx.reply(
         '👋 Добро пожаловать в Trading Signals Bot!\n\n' +
-        'Я помогу вам получать торговые сигналы.',
+        'Я помогу вам получать торговые сигналы.\n\n' +
+        'Используйте команду /help для просмотра списка команд.',
         {
           ...inlineKeyboard,
           ...this.mainKeyboard
@@ -153,7 +157,7 @@ export class TelegramService implements OnModuleInit {
       );
     } catch (error) {
       console.error('Error sending welcome message:', error);
-      await ctx.reply('Произошла ошибка при отправке приветственного сообщения');
+      await ctx.reply('Произошла ошибка при отправке приветственного сообщения', this.mainKeyboard);
     }
   }
 
@@ -162,9 +166,12 @@ export class TelegramService implements OnModuleInit {
 
     const userId = ctx.from?.id.toString();
     if (!userId) {
-      await ctx.reply('Error: Could not identify user');
+      await ctx.reply('Error: Could not identify user', this.mainKeyboard);
       return;
     }
+
+    // Skip if message starts with a command
+    if (ctx.message.text.startsWith('/')) return;
 
     try {
       const { symbol, interval } = parseSubscriptionMessage(ctx.message.text);
@@ -176,12 +183,16 @@ export class TelegramService implements OnModuleInit {
         normalizedInterval,
       );
 
-      const message = `✅ Subscribed to ${symbol} ${normalizedInterval}`;
+      const message = `✅ Подписка на ${symbol} ${normalizedInterval} успешно создана`;
       await ctx.reply(message, this.mainKeyboard);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Invalid subscription format';
+      const errorMessage = error instanceof Error ? error.message : 'Неверный формат подписки';
       await ctx.reply(
-        `❌ ${errorMessage}\n\nUse format: SYMBOL INTERVAL (e.g. SUIUSDT 15m)`,
+        `❌ ${errorMessage}\n\n` +
+        'Используйте формат: SYMBOL INTERVAL\n' +
+        'Например: SUIUSDT 15m\n\n' +
+        'Или команду: /subscribe SYMBOL INTERVAL\n' +
+        'Например: /subscribe SUIUSDT 15m',
         this.mainKeyboard
       );
     }
@@ -284,12 +295,12 @@ export class TelegramService implements OnModuleInit {
   private async handleSubscribeCommand(ctx: Context): Promise<void> {
     const userId = ctx.from?.id.toString();
     if (!userId) {
-      await ctx.reply('Error: Could not identify user');
+      await ctx.reply('Error: Could not identify user', this.mainKeyboard);
       return;
     }
 
     if (!ctx.message || !('text' in ctx.message)) {
-      await ctx.reply('Error: Invalid command format');
+      await ctx.reply('Error: Invalid command format', this.mainKeyboard);
       return;
     }
 
@@ -297,9 +308,9 @@ export class TelegramService implements OnModuleInit {
     const parts = ctx.message.text.split(/\s+/);
     if (parts.length !== 3) {
       await ctx.reply(
-        '❌ Invalid command format.\n\n' +
-        'Use: /subscribe SYMBOL INTERVAL\n' +
-        'Example: /subscribe SUIUSDT 15m',
+        '❌ Неверный формат команды.\n\n' +
+        'Используйте: /subscribe SYMBOL INTERVAL\n' +
+        'Например: /subscribe SUIUSDT 15m',
         this.mainKeyboard
       );
       return;
@@ -316,15 +327,15 @@ export class TelegramService implements OnModuleInit {
       );
 
       await ctx.reply(
-        `✅ Successfully subscribed to ${symbol} ${normalizedInterval}`,
+        `✅ Подписка на ${symbol} ${normalizedInterval} успешно создана`,
         this.mainKeyboard
       );
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Invalid interval format';
+      const errorMessage = error instanceof Error ? error.message : 'Неверный формат интервала';
       await ctx.reply(
         `❌ ${errorMessage}\n\n` +
-        'Use format: /subscribe SYMBOL INTERVAL\n' +
-        'Example: /subscribe SUIUSDT 15m',
+        'Используйте формат: /subscribe SYMBOL INTERVAL\n' +
+        'Например: /subscribe SUIUSDT 15m',
         this.mainKeyboard
       );
     }

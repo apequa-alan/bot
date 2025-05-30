@@ -1,139 +1,72 @@
-Perfect — breaking the MVP into atomic, testable engineering tasks is a smart move for iteration and quality. Here’s your **granular, step-by-step MVP build plan**, using the existing architecture and focusing first on the **Telegram subscription input and signal matching** system.
+Цель — эффективно сопоставить сигнал с подписками и отправить его нужным пользователям, избегая дубликатов, ошибок и обеспечивая масштабируемость.
 
----
+✅ PHASE 4: Signal-to-User Matching and Delivery
+Отправка сигнала только тем пользователям, которые подписаны на соответствующий symbol + interval.
+ Архитектура: Обновлённый поток
+text
+Копировать
+Редактировать
+[ TradingBotService ]
+    └─ onSignalGenerated(signal) ──▶ broadcastSignal(signal)
 
-# 🧱 MVP GOAL:
+[ SignalMonitorService ]
+    └─ checksPriceUpdate() ──▶ updateSignalStatus(signal)
+                              └─▶ notifyUsers(signalUpdate)
+🔁 Интеграция подписок — пошаговый план
+Step 1: Встроить broadcastSignal(signal) в общую логику генерации сигнала
+Start: Сигналы создаются, но рассылка только общая или отсутствует.
 
-> A Telegram user sends a symbol and interval (e.g. `SUIUSDT 15m`). This is saved as a subscription. When a new signal is generated that matches the symbol and interval, the user gets notified.
+End: При создании сигнала вызывается broadcastSignal(signal).
 
----
+В TradingBotService:
 
-## ✅ PHASE 1: Setup Subscription Input via Telegram
+ts
+Копировать
+Редактировать
+await this.signalsService.create(signal); // сохраняем сигнал
+await this.signalBroadcastService.broadcastSignal(signal); // отправляем всем подписанным
+Step 2: В broadcastSignal учесть персональный takeProfit
+Уже реализовано ранее, просто подтвердим: sub.takeProfit ?? defaultProfit.
 
-### **1. Create Subscription Entity (TypeORM)**
+Step 3: Встроить подписки в SignalMonitorService (отслеживание TP)
+Когда происходит обновление цены — проверяется: был ли достигнут TP? Если да → отправить обновление только тем, кто подписан.
 
-* **Start**: Subscription model not defined.
-* **End**: A TypeORM entity exists with `id`, `userId`, `symbol`, `interval`, `takeProfit`, `active`.
+ts
+Копировать
+Редактировать
+const activeSignals = await this.signalsService.getActiveSignals();
 
----
+for (const signal of activeSignals) {
+  const price = getCurrentPrice(signal.symbol);
 
-### **2. Generate DB Migration for Subscription Table**
+  const { profit: defaultProfit } = getDefaultSignalConfig(signal.interval);
+  const subscribers = await this.subscriptionsService.getActiveSubscribersForSymbolInterval(signal.symbol, signal.interval);
 
-* **Start**: Subscription table not in database.
-* **End**: Migration is applied and subscription table exists.
+  for (const sub of subscribers) {
+    const profitPercent = sub.takeProfit ?? defaultProfit;
+    const targetPrice = calculateTakeProfit(signal.entryPrice, profitPercent, signal.type);
 
----
+    if (signal.type === 'long' && price >= targetPrice ||
+        signal.type === 'short' && price <= targetPrice) {
+      await this.signalsService.markAsSuccess(signal.id);
 
-### **3. Implement SubscriptionsRepository**
+      const message = `✅ Signal hit take profit!\nSymbol: ${signal.symbol}\nEntry: ${signal.entryPrice}\nTP: ${targetPrice}`;
+      await this.telegramService.sendMessageToUser(sub.userId, message);
+    }
+  }
+}
+Step 4: Не дублировать обновление сигналов
+Добавь защиту от повторной отправки, например: поле notified = true.
 
-* **Start**: No data access layer.
-* **End**: Exports standard CRUD methods (`findOne`, `save`, `findActiveBySymbolAndInterval`).
+После отправки обновляй notified = true в сигнале.
 
----
+Проверять expiration
+В SignalMonitorService добавь:
 
-### **4. Create SubscriptionsService with createOrUpdateSubscription()**
-
-* **Start**: No service logic to store/update subscriptions.
-* **End**: Method can insert or update an active subscription by `userId+symbol+interval`.
-
----
-
-### **5. Parse Telegram Message for Symbol + Interval**
-
-* **Start**: Telegram bot receives all messages as plain text.
-* **End**: Bot can extract symbol and interval from message like: `SUIUSDT 15m`.
-
----
-
-### **6. Normalize Interval (15m → 15, 1h → 60, etc.)**
-
-* **Start**: Raw string intervals.
-* **End**: Normalized to match system format (from config).
-
----
-
-### **7. Call SubscriptionsService from TelegramService**
-
-* **Start**: Telegram does nothing with parsed input.
-* **End**: Telegram passes data to SubscriptionsService and sends confirmation.
-
----
-
-### **8. Validate Input and Handle Errors**
-
-* **Start**: Bot assumes input is correct.
-* **End**: Bot handles invalid input and notifies user accordingly.
-
----
-
-## ✅ PHASE 2: Signal Broadcast to Subscribers
-
-### **9. Create getSubscribersForSignal(symbol, interval)**
-
-* **Start**: No logic to fetch matching subscribers.
-* **End**: SubscriptionsService can return userIds for a given `symbol + interval`.
-
----
-
-### **10. Add subscriber lookup to SignalBroadcastService**
-
-* **Start**: Signals are broadcast to channel only.
-* **End**: Subscribers are fetched and messaged privately.
-
----
-
-### **11. Format personalized signal message**
-
-* **Start**: Messages are generic or static.
-* **End**: Telegram message includes `entry price`, `symbol`, `type`, `takeProfit`.
-
----
-
-### **12. Send message to each userId via TelegramService**
-
-* **Start**: No 1:1 user messaging.
-* **End**: Each subscriber receives a message for matching signal.
-
----
-
-### **13. Handle Telegram API errors per-user**
-
-* **Start**: All errors crash or are ignored.
-* **End**: Graceful error logging + continue processing next user.
-
----
-
-## ✅ PHASE 3: Verification and Testing
-
-### **14. Create script to insert fake signal (manually or mocked)**
-
-* **Start**: Can’t test signal matching.
-* **End**: One command or test inserts a fake signal into DB or memory.
-
----
-
-### **15. Run test: user subscribes + receives fake signal**
-
-* **Start**: Only components tested in isolation.
-* **End**: Simulated end-to-end test from Telegram → DB → signal → user notification.
-
----
-
-### **16. Optional: Add `/subscriptions` command**
-
-* **Start**: No user feedback on subscriptions.
-* **End**: Bot replies with current active subscriptions for user.
-
----
-
-## ✅ DONE = MVP
-
-Once complete, you’ll have:
-
-* Telegram interface for subscriptions
-* Active subscription tracking
-* Signal-to-user delivery
-
----
-
-Would you like this broken down into a machine-readable format like JSON or YAML for task scheduling?
+ts
+Копировать
+Редактировать
+if (Date.now() > signal.exitTimestamp) {
+  await this.signalsService.markAsFailure(signal.id);
+  // optionally notify users if you want
+}

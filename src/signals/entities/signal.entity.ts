@@ -1,9 +1,9 @@
-import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
 @Entity('signals')
 export class Signal {
-  @PrimaryGeneratedColumn()
-  id: number;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
   @Column()
   symbol: string;
@@ -14,7 +14,7 @@ export class Signal {
   @Column()
   type: 'long' | 'short';
 
-  @Column('float')
+  @Column('decimal', { precision: 20, scale: 8 })
   entryPrice: number;
 
   @Column('float')
@@ -29,8 +29,8 @@ export class Signal {
   @Column('float', { nullable: true })
   exitPrice: number | null;
 
-  @Column('bigint', { nullable: true })
-  exitTimestamp: number | null;
+  @Column({ nullable: true, type: 'timestamp' })
+  exitTimestamp: Date | null;
 
   @Column('float', { nullable: true })
   profitLoss: number | null;
@@ -44,7 +44,7 @@ export class Signal {
   @Column('float')
   maxProfit: number;
 
-  @Column()
+  @Column({ default: false })
   notified: boolean;
 
   @Column()
@@ -52,4 +52,10 @@ export class Signal {
 
   @Column('int', { nullable: true })
   validityHours: number;
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
 } 

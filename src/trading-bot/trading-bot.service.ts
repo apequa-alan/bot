@@ -433,6 +433,7 @@ export class TradingBotService implements OnModuleInit {
 
         const signal = new Signal();
         signal.symbol = symbol;
+        signal.interval = this.INTERVAL;
         signal.entryPrice = currentPrice;
         signal.entryTime = currentTime;
         signal.type = isLongSignal ? 'long' : 'short';

@@ -51,6 +51,20 @@ export class SubscriptionsService {
   }
 
   async getUserSubscriptions(userId: string): Promise<Subscription[]> {
-    return this.repository.find({ userId, active: true });
+    return this.repository.find({
+      userId,
+      active: true,
+    });
+  }
+
+  async getActiveSubscribersForSymbolInterval(
+    symbol: string,
+    interval: string,
+  ): Promise<Subscription[]> {
+    return this.repository.find({
+      symbol,
+      interval,
+      active: true,
+    });
   }
 } 
