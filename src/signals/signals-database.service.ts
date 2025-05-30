@@ -27,7 +27,7 @@ export class SignalsDatabaseService {
         status: status as Signal['status'],
         exitPrice,
         profitLoss,
-        exitTimestamp: Date.now(),
+        closedAt: new Date(),
       },
     );
   }
@@ -54,9 +54,9 @@ export class SignalsDatabaseService {
   }
 
   async cleanupOldSignals(daysToKeep: number = 30): Promise<void> {
-    const cutoffDate = Date.now() - daysToKeep * 24 * 60 * 60 * 1000;
+    const cutoffDate = new Date(Date.now() - daysToKeep * 24 * 60 * 60 * 1000);
     await this.signalsRepository.delete({
-      timestamp: LessThan(cutoffDate),
+      createdAt: LessThan(cutoffDate),
       status: In(['success', 'failure']),
     });
   }

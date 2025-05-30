@@ -31,19 +31,20 @@ export interface WsKlineV5 {
 export interface Signal {
   symbol: string;
   entryPrice: number;
-  entryTime: string;
   type: 'long' | 'short';
-  active: boolean;
+  status: 'active' | 'success' | 'failure';
+  takeProfit?: number;
+  stopLoss?: number;
+  exitPrice?: number;
+  profitLoss: number | null;
   maxProfit: number;
   notified: boolean;
   messageId: number;
-  status?: 'success' | 'failure' | 'stopped' | 'active';
-  takeProfit?: number;
-  timestamp?: number;
-  exitPrice?: number;
-  exitTimestamp?: number;
-  profitLoss?: number;
   validityHours: number;
+  timestamp: number;
+  createdAt: Date;
+  closedAt?: Date;
+  updatedAt: Date;
 }
 
 export interface TimeframeConfig {

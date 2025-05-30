@@ -7,6 +7,7 @@ import {
   formatHeaderForMarkdown,
   escapeMarkdownV2,
 } from './telegram.utils';
+import { SubscriptionCommands } from './commands/subscription.commands';
 
 @Injectable()
 export class TelegramService implements OnModuleInit {
@@ -15,6 +16,7 @@ export class TelegramService implements OnModuleInit {
   constructor(
     @InjectBot() private bot: Telegraf,
     private readonly configService: ConfigService,
+    private readonly subscriptionCommands: SubscriptionCommands,
   ) {
     this.channelId = this.configService.get<string>('TELEGRAM_CHANNEL_ID', '');
     if (!this.channelId) {
@@ -22,10 +24,39 @@ export class TelegramService implements OnModuleInit {
     }
   }
 
-  onModuleInit() {
+  async onModuleInit() {
     this.bot.command('start', async (ctx) => {
-      await ctx.reply('That is bot for sending signals');
+      const userId = ctx.from.id.toString();
+      await this.subscriptionCommands.handleSubscribeCommand(userId);
     });
+
+    this.bot.command('subscribe', async (ctx) => {
+      const userId = ctx.from.id.toString();
+      await this.subscriptionCommands.handleSubscribeCommand(userId);
+    });
+
+    this.bot.command('subscriptions', async (ctx) => {
+      const userId = ctx.from.id.toString();
+      await this.subscriptionCommands.handleSubscriptionsCommand(userId);
+    });
+
+    this.bot.command('unsubscribe', async (ctx) => {
+      const userId = ctx.from.id.toString();
+      await this.subscriptionCommands.handleUnsubscribeCommand(userId);
+    });
+
+    this.bot.command('pairs', async (ctx) => {
+      const userId = ctx.from.id.toString();
+      await this.subscriptionCommands.handlePairsCommand(userId);
+    });
+
+    this.bot.on('message', async (ctx) => {
+      if (!ctx.message || !('text' in ctx.message) || ctx.message.text.startsWith('/')) return;
+      const userId = ctx.from.id.toString();
+      await this.subscriptionCommands.handleMessage(userId, ctx.message.text);
+    });
+
+    await this.bot.launch();
   }
 
   async sendNotification(
@@ -113,6 +144,38 @@ export class TelegramService implements OnModuleInit {
       // Fallback to regular message if reply fails
       return this.sendNotification(type, message);
     }
+  }
+
+  async sendDirectMessage(userId: string, message: string): Promise<void> {
+    try {
+      const escapedMessage = escapeMarkdownV2(message);
+      await this.bot.telegram.sendMessage(userId, escapedMessage, {
+        parse_mode: 'MarkdownV2',
+      });
+    } catch (err) {
+      console.error(`Error sending direct message to ${userId}:`, err);
+      // If message formatting fails, try sending without markdown
+      try {
+        await this.bot.telegram.sendMessage(userId, message, {
+          parse_mode: undefined,
+        });
+      } catch (fallbackErr) {
+        console.error('Error sending fallback message:', fallbackErr);
+      }
+    }
+  }
+
+  async sendDirectError(userId: string, error: unknown, context?: string): Promise<void> {
+    const errorMessage = formatErrorForMarkdown(error);
+    const message = context 
+      ? `${formatHeaderForMarkdown(context)}\n${errorMessage}`
+      : errorMessage;
+    await this.sendDirectMessage(userId, message);
+  }
+
+  async sendDirectInfo(userId: string, header: string, content: string): Promise<void> {
+    const message = `${formatHeaderForMarkdown(header)}\n${content}`;
+    await this.sendDirectMessage(userId, message);
   }
 
   /**

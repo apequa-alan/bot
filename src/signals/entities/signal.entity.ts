@@ -1,52 +1,58 @@
-import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
 @Entity('signals')
 export class Signal {
-  @PrimaryGeneratedColumn()
-  id: number;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
   @Column()
   symbol: string;
 
   @Column()
-  type: 'long' | 'short';
-
-  @Column('float')
-  entryPrice: number;
-
-  @Column('float')
-  takeProfit: number;
-
-  @Column('bigint')
-  timestamp: number;
+  interval: string;
 
   @Column()
-  status: 'success' | 'failure' | 'active';
+  type: 'long' | 'short';
 
-  @Column('float', { nullable: true })
-  exitPrice: number | null;
+  @Column('decimal', { precision: 10, scale: 2 })
+  entryPrice: number;
 
-  @Column('bigint', { nullable: true })
-  exitTimestamp: number | null;
+  @Column('decimal', { precision: 10, scale: 2, nullable: true })
+  takeProfit?: number;
+
+  @Column('decimal', { precision: 10, scale: 2, nullable: true })
+  stopLoss?: number;
+
+  @Column({ default: 'active' })
+  status: 'active' | 'success' | 'failure';
+
+  @Column('decimal', { precision: 10, scale: 2, nullable: true })
+  exitPrice?: number;
 
   @Column('float', { nullable: true })
   profitLoss: number | null;
 
-  @Column()
-  entryTime: string;
-
-  @Column()
-  active: boolean;
-
-  @Column('float')
+  @Column('float', { default: 0 })
   maxProfit: number;
 
-  @Column()
+  @Column({ default: false })
   notified: boolean;
 
-  @Column()
+  @Column({ nullable: true })
   messageId: number;
 
   @Column('int', { nullable: true })
   validityHours: number;
+
+  @Column('bigint')
+  timestamp: number;
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @Column({ nullable: true })
+  closedAt?: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
 } 

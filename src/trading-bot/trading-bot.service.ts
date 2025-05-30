@@ -14,6 +14,7 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SignalsService } from '../signals/signals.service';
 import { Signal } from '../signals/entities/signal.entity';
+import { SignalDispatcherService } from '../signals/signal-dispatcher.service';
 import {
   formatNumberForMarkdown,
   formatPercentageForMarkdown,
@@ -28,7 +29,7 @@ export class TradingBotService implements OnModuleInit {
   private ws: WebsocketClient;
   private symbolData: Map<string, SymbolData> = new Map();
   private readonly TOP_VOLUME_COINS_COUNT = 10;
-  private readonly ONE_HISTOGRAM_DIRECTION_CANDLES = 5;
+  private readonly ONE_HISTOGRAM_DIRECTION_CANDLES = 3;
 
   // Configure profit and validity hours for each timeframe
   private readonly TIMEFRAME_CONFIG: Partial<
@@ -37,9 +38,9 @@ export class TradingBotService implements OnModuleInit {
     '1': { profit: 0.6, validityHours: 1 },
     '3': { profit: 0.8, validityHours: 1 },
     '5': { profit: 1, validityHours: 1 },
-    '15': { profit: 1.5, validityHours: 2 },
-    '30': { profit: 2, validityHours: 2 },
-    '60': { profit: 2.5, validityHours: 4 },
+    '15': { profit: 1, validityHours: 2.5 },
+    '30': { profit: 1.5, validityHours: 2.5 },
+    '60': { profit: 2, validityHours: 4 },
     '120': { profit: 3, validityHours: 8 },
     '240': { profit: 3.5, validityHours: 16 },
     '360': { profit: 4, validityHours: 32 },
@@ -77,6 +78,7 @@ export class TradingBotService implements OnModuleInit {
     private readonly telegramService: TelegramService,
     private readonly bybitService: BybitService,
     private readonly signalsService: SignalsService,
+    private readonly signalDispatcher: SignalDispatcherService,
   ) {
     this.BYBIT_API_KEY = this.configService.get<string>('BYBIT_API_KEY') ?? '';
     this.BYBIT_API_SECRET =
@@ -415,40 +417,23 @@ export class TradingBotService implements OnModuleInit {
         const currentTime = symbolData.candles[symbolData.candles.length - 1].startTime;
         const config = this.getProfitConfig();
 
-        const signalType = isLongSignal ? '📈 Сигнал на открытие лонга' : '📉 Сигнал на открытие шорта';
-        const formattedSymbol = formatSymbolForMarkdown(symbol);
-        const formattedPrice = formatNumberForMarkdown(Number(currentClosePrice));
-        const formattedTP = formatPercentageForMarkdown(config.profit);
-
         console.log(config, 'config');
-        
-        const signalContent = `${formattedSymbol} ${signalType}\n` +
-          `Цена: ${formattedPrice}\n` +
-          `TP: ${formattedTP}\n`;
-
-        const messageId = await this.telegramService.sendInfoNotification(
-          'Новый торговый сигнал',
-          signalContent
-        );
 
         const signal = new Signal();
         signal.symbol = symbol;
         signal.entryPrice = currentPrice;
-        signal.entryTime = currentTime;
         signal.type = isLongSignal ? 'long' : 'short';
-        signal.active = true;
         signal.maxProfit = 0;
         signal.notified = false;
-        signal.messageId = messageId;
         signal.status = 'active';
         signal.takeProfit = currentPrice * (1 + config.profit / 100);
         signal.timestamp = Date.now();
-        signal.exitPrice = null;
-        signal.exitTimestamp = null;
+        signal.exitPrice = undefined;
         signal.profitLoss = null;
         signal.validityHours = config.validityHours;
 
         await this.signalsService.createSignal(signal);
+        signal.messageId = await this.signalDispatcher.dispatchToChannel(signal);
       } else {
         console.log(
           `${symbol}: [handleMacdSignal] Нет сигнала для открытия позиции. MACD малого таймфрейма: ${currentSign}, MACD большого таймфрейма: ${higherTimeframeHistogram.toFixed(6)}`,

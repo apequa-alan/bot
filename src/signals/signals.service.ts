@@ -1,13 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { SignalsDatabaseService } from './signals-database.service';
 import { Signal } from './entities/signal.entity';
-import { TelegramService } from '../telegram/telegram.service';
+import { SignalUpdateService } from '../telegram/services/signal-update.service';
+import { SignalDispatcherService } from './signal-dispatcher.service';
 
 @Injectable()
 export class SignalsService {
   constructor(
     private readonly signalsDb: SignalsDatabaseService,
-    private readonly telegramService: TelegramService,
+    private readonly signalUpdate: SignalUpdateService,
+    private readonly signalDispatcher: SignalDispatcherService,
   ) {}
 
   async createSignal(signal: Signal): Promise<void> {
@@ -19,6 +21,12 @@ export class SignalsService {
     }
 
     await this.signalsDb.saveSignal(signal);
+    
+    // Dispatch signal to channel and subscribers
+    await Promise.all([
+      this.signalDispatcher.dispatchToChannel(signal),
+      this.signalDispatcher.dispatchToSubscribers(signal)
+    ]);
   }
 
   async updateSignalStatus(
@@ -32,16 +40,8 @@ export class SignalsService {
 
     await this.signalsDb.updateSignalStatus(symbol, status, currentPrice, profitLoss);
     
-    if (status === 'success') {
-      await this.telegramService.sendReplyNotification(
-        'fix',
-        `${symbol} 💰 Прибыль по сигналу! \n` +
-        `Тип: ${signal.type}\n` +  
-        `Текущая цена: ${currentPrice}\n` +  
-        `Доходность: ${profitLoss.toFixed(2)}%`,
-        signal.messageId,
-      );
-    }
+    // Broadcast update to subscribed users
+    await this.signalUpdate.broadcastUpdate(signal, currentPrice, profitLoss);
   }
 
   async getActiveSignals(): Promise<Signal[]> {
