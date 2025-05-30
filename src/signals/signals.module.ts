@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SignalsService } from './signals.service';
 import { SignalsDatabaseService } from './signals-database.service';
@@ -12,8 +12,8 @@ import { SignalDispatcherService } from './signal-dispatcher.service';
 @Module({
   imports: [
     TypeOrmModule.forFeature([Signal]),
-    TelegramModule,
-    SubscriptionsModule,
+    forwardRef(() => TelegramModule),
+    forwardRef(() => SubscriptionsModule),
   ],
   providers: [
     SignalsService,

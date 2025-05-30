@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { MessageHandler } from './message.handler';
 import { Signal } from '../../signals/entities/signal.entity';
 import { SubscriptionsService } from '../../subscriptions/subscriptions.service';
@@ -7,6 +7,7 @@ import { SubscriptionsService } from '../../subscriptions/subscriptions.service'
 export class SignalUpdateService {
   constructor(
     private readonly messageHandler: MessageHandler,
+    @Inject(forwardRef(() => SubscriptionsService))
     private readonly subscriptionsService: SubscriptionsService,
   ) {}
 

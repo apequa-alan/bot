@@ -3,12 +3,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SubscriptionEntity } from './entities/subscription.entity';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
+import { UserSignalStreamManagerService } from './user-signal-stream-manager.service';
 
 @Injectable()
 export class SubscriptionsService {
   constructor(
     @InjectRepository(SubscriptionEntity)
     private readonly subscriptionsRepository: Repository<SubscriptionEntity>,
+    private readonly userSignalStreamManager: UserSignalStreamManagerService,
   ) {}
 
   async create(
@@ -19,7 +21,16 @@ export class SubscriptionsService {
       userId,
       ...dto,
     });
-    return this.subscriptionsRepository.save(subscription);
+
+    const savedSubscription = await this.subscriptionsRepository.save(subscription);
+
+    // Subscribe to the symbol stream
+    await this.userSignalStreamManager.subscribeToSymbolStream(
+      dto.symbol,
+      dto.interval,
+    );
+
+    return savedSubscription;
   }
 
   async findByUser(userId: string): Promise<SubscriptionEntity[]> {
@@ -36,15 +47,24 @@ export class SubscriptionsService {
   }
 
   async delete(id: number, userId: string): Promise<boolean> {
-    const result = await this.subscriptionsRepository.delete({ id, userId });
+    const subscription = await this.subscriptionsRepository.findOne({
+      where: { id, userId },
+    });
 
-    if (result.affected === 0) {
+    if (!subscription) {
       throw new NotFoundException(
         `Subscription with ID ${id} not found for user ${userId}`,
       );
     }
 
-    return true;
+    // Unsubscribe from the symbol stream
+    await this.userSignalStreamManager.unsubscribeFromSymbolStream(
+      subscription.symbol,
+      subscription.interval,
+    );
+
+    const result = await this.subscriptionsRepository.delete({ id, userId });
+    return result?.affected ? result.affected > 0 : false;
   }
 
   async findMatching(

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { Signal } from './entities/signal.entity';
 import { TelegramService } from '../telegram/telegram.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
@@ -7,7 +7,9 @@ import { SignalFormatterService } from './signal-formatter.service';
 @Injectable()
 export class SignalDispatcherService {
   constructor(
+    @Inject(forwardRef(() => TelegramService))
     private readonly telegramService: TelegramService,
+    @Inject(forwardRef(() => SubscriptionsService))
     private readonly subscriptionsService: SubscriptionsService,
     private readonly signalFormatterService: SignalFormatterService,
   ) {}

@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { SubscriptionsService } from '../../subscriptions/subscriptions.service';
 import { SessionStore } from '../services/session.store';
 import { MessageHandler } from '../services/message.handler';
 import { ConversationService } from '../services/conversation.service';
+import { BybitService } from '../../bybit/bybit.service';
 
 type SubscriptionState =
   | 'awaiting_symbol'
@@ -11,29 +12,16 @@ type SubscriptionState =
 
 @Injectable()
 export class SubscriptionCommands {
-  private readonly availablePairs: readonly string[] = [
-    'BTCUSDT',
-    'ETHUSDT',
-    'BNBUSDT',
-    'ADAUSDT',
-    'DOGEUSDT',
-    'XRPUSDT',
-    'DOTUSDT',
-    'UNIUSDT',
-    'LTCUSDT',
-    'LINKUSDT',
-    'SOLUSDT',
-    'MATICUSDT',
-    'AVAXUSDT',
-    'ATOMUSDT',
-    'TRXUSDT',
-  ] as const;
+  private readonly availableIntervals = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d'] as const;
 
   constructor(
+    @Inject(forwardRef(() => SubscriptionsService))
     private readonly subscriptionsService: SubscriptionsService,
     private readonly sessionStore: SessionStore,
     private readonly messageHandler: MessageHandler,
     private readonly conversationService: ConversationService,
+    @Inject(forwardRef(() => BybitService))
+    private readonly bybitService: BybitService,
   ) {}
 
   async handleSubscribeCommand(userId: string): Promise<void> {
@@ -146,9 +134,30 @@ export class SubscriptionCommands {
       return;
     }
 
+    // Validate symbol against Bybit
+    try {
+      const symbol = data.symbol.toUpperCase();
+      const response = await this.bybitService.getTickers({
+        category: 'inverse',
+        symbol,
+      });
+
+      if (!response?.result?.list?.length) {
+        throw new Error(`Торговая пара ${symbol} не найдена на Bybit`);
+      }
+    } catch (error) {
+      await this.messageHandler.sendDirectError(
+        userId,
+        error,
+        'Ошибка валидации',
+      );
+      await this.sessionStore.clearState(userId);
+      return;
+    }
+
     await this.subscriptionsService.create(userId, {
-      symbol: data.symbol,
-      interval: data.interval,
+      symbol: data.symbol.toUpperCase(),
+      interval: data.interval.toLowerCase(),
       takeProfit: 1.0, // Default take profit
     });
 
@@ -193,11 +202,11 @@ export class SubscriptionCommands {
    * @param userId - The ID of the user requesting the pairs list
    */
   async handlePairsCommand(userId: string): Promise<void> {
-    const pairsList = this.availablePairs.join('\n');
+    const intervalsList = this.availableIntervals.join('\n');
     await this.messageHandler.sendDirectInfo(
       userId,
-      'Доступные торговые пары',
-      pairsList,
+      'Доступные таймфреймы',
+      intervalsList,
     );
   }
 }

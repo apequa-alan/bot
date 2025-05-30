@@ -16,7 +16,6 @@ import { SignalsService } from '../signals/signals.service';
 import { Signal } from '../signals/entities/signal.entity';
 import { SignalDispatcherService } from '../signals/signal-dispatcher.service';
 import {
-  formatNumberForMarkdown,
   formatPercentageForMarkdown,
   formatSymbolForMarkdown,
   formatHeaderForMarkdown,
@@ -134,17 +133,10 @@ export class TradingBotService implements OnModuleInit {
       }
 
       for (const symbol of coinsToAdd) {
-        const { candles, smoothedSMA } =
-          await this.bybitService.fetchCandlesWithoutLast(
-            symbol,
-            this.INTERVAL,
-            limit,
-          );
-
         this.symbolData.set(symbol, {
           symbol,
-          candles,
-          smaVolumes: smoothedSMA !== null ? [smoothedSMA] : [],
+          candles: [],
+          smaVolumes: [],
           prevHistogramAbs: 0,
         });
 
@@ -232,6 +224,13 @@ export class TradingBotService implements OnModuleInit {
           volume: latestKline.volume,
           turnover: latestKline.turnover,
         });
+
+        // Check if we have enough candles for MACD calculation
+        const minRequiredCandles = Number(this.SLOW_PERIOD) + Number(this.SIGNAL_PERIOD);
+        if (symbolData.candles.length < minRequiredCandles) {
+          console.log(`${symbol}: Ожидание накопления свечей (${symbolData.candles.length}/${minRequiredCandles})`);
+          return;
+        }
 
         const closingPrices = symbolData.candles.map((item) =>
           parseFloat(item.closePrice),
@@ -421,6 +420,7 @@ export class TradingBotService implements OnModuleInit {
 
         const signal = new Signal();
         signal.symbol = symbol;
+        signal.interval = this.INTERVAL;
         signal.entryPrice = currentPrice;
         signal.type = isLongSignal ? 'long' : 'short';
         signal.maxProfit = 0;

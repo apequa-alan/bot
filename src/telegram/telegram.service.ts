@@ -55,8 +55,6 @@ export class TelegramService implements OnModuleInit {
       const userId = ctx.from.id.toString();
       await this.subscriptionCommands.handleMessage(userId, ctx.message.text);
     });
-
-    await this.bot.launch();
   }
 
   async sendNotification(
