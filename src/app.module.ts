@@ -7,6 +7,8 @@ import { TelegramModule } from './telegram/telegram.module';
 import { BybitModule } from './bybit/bybit.module';
 import { SignalsModule } from './signals/signals.module';
 import { Signal } from './signals/entities/signal.entity';
+import { Subscription } from './trading-bot/entities/subscription.entity';
+import { SubscriptionsModule } from './trading-bot/subscriptions/subscriptions.module';
 
 @Module({
   imports: [
@@ -14,7 +16,7 @@ import { Signal } from './signals/entities/signal.entity';
     TypeOrmModule.forRoot({
       type: 'sqlite',
       database: 'signals.db',
-      entities: [Signal],
+      entities: [Signal, Subscription],
       synchronize: false,
     }),
     ScheduleModule.forRoot(),
@@ -22,6 +24,7 @@ import { Signal } from './signals/entities/signal.entity';
     TelegramModule,
     BybitModule,
     SignalsModule,
+    SubscriptionsModule,
   ],
 })
 export class AppModule {}

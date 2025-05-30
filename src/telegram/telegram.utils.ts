@@ -67,4 +67,58 @@ export const formatErrorForMarkdown = (error: unknown): string => {
 export const formatHeaderForMarkdown = (text: string): string => {
   return `*${text}*`;
 };
+
+/**
+ * Normalizes a trading interval to minutes
+ * @param interval The interval to normalize (e.g. '15m', '1h', '4h', '1d')
+ * @returns Normalized interval in minutes
+ * @throws Error if interval format is invalid
+ */
+export const normalizeInterval = (interval: string): number => {
+  const match = interval.match(/^(\d+)([mhd])$/);
+  if (!match) {
+    throw new Error('Invalid interval format. Use format like: 15m, 1h, 4h, 1d');
+  }
+
+  const [, value, unit] = match;
+  const numValue = parseInt(value, 10);
+
+  switch (unit) {
+    case 'm':
+      return numValue;
+    case 'h':
+      return numValue * 60;
+    case 'd':
+      return numValue * 60 * 24;
+    default:
+      throw new Error('Invalid interval unit. Use m (minutes), h (hours), or d (days)');
+  }
+};
+
+/**
+ * Parses a subscription message into symbol and interval
+ * @param message The message to parse (e.g. 'SUIUSDT 15m')
+ * @returns Object containing symbol and normalized interval
+ * @throws Error if message format is invalid
+ */
+export const parseSubscriptionMessage = (message: string): { symbol: string; interval: string } => {
+  const parts = message.trim().split(/\s+/);
+  if (parts.length !== 2) {
+    throw new Error('Invalid message format. Use format like: SUIUSDT 15m');
+  }
+
+  const [symbol, interval] = parts;
+  
+  // Validate symbol format (uppercase, no spaces)
+  if (!/^[A-Z0-9]+$/.test(symbol)) {
+    throw new Error('Invalid symbol format. Use uppercase letters and numbers only');
+  }
+
+  // Validate interval format
+  if (!/^\d+[mhd]$/.test(interval)) {
+    throw new Error('Invalid interval format. Use format like: 15m, 1h, 4h, 1d');
+  }
+
+  return { symbol, interval };
+};
   

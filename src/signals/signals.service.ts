@@ -2,12 +2,14 @@ import { Injectable } from '@nestjs/common';
 import { SignalsDatabaseService } from './signals-database.service';
 import { Signal } from './entities/signal.entity';
 import { TelegramService } from '../telegram/telegram.service';
+import { SubscriptionsService } from '../trading-bot/subscriptions/subscriptions.service';
 
 @Injectable()
 export class SignalsService {
   constructor(
     private readonly signalsDb: SignalsDatabaseService,
     private readonly telegramService: TelegramService,
+    private readonly subscriptionsService: SubscriptionsService,
   ) {}
 
   async createSignal(signal: Signal): Promise<void> {
@@ -19,6 +21,36 @@ export class SignalsService {
     }
 
     await this.signalsDb.saveSignal(signal);
+
+    // Notify subscribers
+    const subscribers = await this.subscriptionsService.getSubscribersForSignal(
+      signal.symbol,
+      signal.interval,
+    );
+
+    for (const subscriber of subscribers) {
+      try {
+        const message = this.formatSignalMessage(signal, subscriber);
+        await this.telegramService.sendDirectMessage(subscriber.userId, message);
+      } catch (error) {
+        console.error(`Failed to notify subscriber ${subscriber.userId}:`, error);
+        // Continue with next subscriber
+      }
+    }
+  }
+
+  private formatSignalMessage(signal: Signal, subscription: { takeProfit: number | null }): string {
+    const baseMessage = `🔔 Новый сигнал!\n\n` +
+      `Символ: ${signal.symbol}\n` +
+      `Интервал: ${signal.interval}\n` +
+      `Тип: ${signal.type === 'long' ? '🟢 Long' : '🔴 Short'}\n` +
+      `Цена входа: ${signal.entryPrice}\n`;
+
+    if (subscription.takeProfit) {
+      return baseMessage + `Take Profit: ${subscription.takeProfit}%`;
+    }
+
+    return baseMessage;
   }
 
   async updateSignalStatus(

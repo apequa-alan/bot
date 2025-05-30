@@ -4,9 +4,13 @@ import { SignalsService } from './signals.service';
 import { SignalsDatabaseService } from './signals-database.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { Signal } from './entities/signal.entity';
+import { SubscriptionsModule } from '../trading-bot/subscriptions/subscriptions.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Signal])],
+  imports: [
+    TypeOrmModule.forFeature([Signal]),
+    SubscriptionsModule,
+  ],
   providers: [SignalsService, SignalsDatabaseService, TelegramService],
   exports: [SignalsService],
 })

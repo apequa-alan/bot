@@ -9,6 +9,9 @@ export class Signal {
   symbol: string;
 
   @Column()
+  interval: string;
+
+  @Column()
   type: 'long' | 'short';
 
   @Column('float')
