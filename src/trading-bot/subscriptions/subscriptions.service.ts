@@ -109,4 +109,14 @@ export class SubscriptionsService {
 
     await this.tradingBotService.handleSubscriptionChange();
   }
+
+  async getSubscribersForPair(symbol: string, interval: string): Promise<string[]> {
+    const subscriptions = await this.repository.find({
+      symbol,
+      interval,
+      active: true,
+    });
+
+    return subscriptions.map(sub => sub.userId);
+  }
 }

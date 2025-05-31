@@ -10,6 +10,7 @@ export interface Candle {
 
 export interface SymbolData {
   symbol: string;
+  interval: string;
   candles: Candle[];
   smaVolumes: number[];
   prevHistogramAbs: number;

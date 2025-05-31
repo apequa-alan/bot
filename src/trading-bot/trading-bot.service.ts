@@ -78,8 +78,40 @@ export class TradingBotService implements OnModuleInit {
       secret: this.BYBIT_API_SECRET,
     });
 
+    // Initialize with top volume coins
+    await this.initializeTopVolumeCoins();
     await this.startBot();
-    await this.updateSubscriptions();
+  }
+
+  private async initializeTopVolumeCoins() {
+    try {
+      const newTopCoins = await this.bybitService.getTopVolumeCoins(
+        this.TOP_VOLUME_COINS_COUNT,
+      );
+      
+      if (newTopCoins.length === 0) {
+        console.error('Не удалось получить новый список монет для отслеживания');
+        return;
+      }
+
+      // Create subscriptions for each top coin
+      for (const symbol of newTopCoins) {
+        await this.subscriptionsService.createOrUpdateSubscription(
+          this.channelId,
+          symbol,
+          this.INTERVAL,
+        );
+      }
+
+      console.log('Initialized top volume coins:', newTopCoins);
+    } catch (error) {
+      console.error('Error initializing top volume coins:', error);
+      await this.telegramService.sendErrorNotification({
+        error,
+        context: 'Ошибка при инициализации топ монет',
+        userId: this.channelId,
+      });
+    }
   }
 
   private validateInterval(interval: string): KlineIntervalV3 {
@@ -117,6 +149,7 @@ export class TradingBotService implements OnModuleInit {
           const wsKlineTopicEvent = `kline.${interval}.${symbol}`;
           this.ws.unsubscribeV5(wsKlineTopicEvent, 'linear');
           this.activeSubscriptions.delete(pair);
+          this.symbolData.delete(pair);
           console.log(`Unsubscribed from ${symbol} ${interval}`);
         }
       }
@@ -135,9 +168,10 @@ export class TradingBotService implements OnModuleInit {
               limit,
             );
 
-          // Initialize data for new symbol
-          this.symbolData.set(symbol, {
+          // Initialize data for new symbol-interval pair
+          this.symbolData.set(pair, {
             symbol,
+            interval: validInterval,
             candles,
             smaVolumes: smoothedSMA !== null ? [smoothedSMA] : [],
             prevHistogramAbs: 0,
@@ -349,6 +383,7 @@ export class TradingBotService implements OnModuleInit {
 
             this.handleMacdSignal(
               symbol,
+              this.INTERVAL,
               latestHist,
               openPositionCondition,
               histogram,
@@ -375,11 +410,13 @@ export class TradingBotService implements OnModuleInit {
 
   private async handleMacdSignal(
     symbol: string,
+    interval: string,
     histogramValue: number,
     canOpenPositionByVolume: boolean,
     macdHistogram: number[],
   ) {
-    const symbolData = this.symbolData.get(symbol);
+    const pairKey = `${symbol}-${interval}`;
+    const symbolData = this.symbolData.get(pairKey);
     if (!symbolData) return;
 
     const currentHistogramAbs = Math.abs(histogramValue);
@@ -493,58 +530,64 @@ export class TradingBotService implements OnModuleInit {
           symbolData.candles[symbolData.candles.length - 1].startTime;
         const config = this.getProfitConfig();
 
-        // Get active signals for this symbol and interval
-        const activeSignals = await this.signalsService.getActiveSignals(
-          this.channelId,
-        );
-        const hasActiveSignal = activeSignals.some(
-          (signal) =>
-            signal.symbol === symbol &&
-            signal.interval === this.INTERVAL &&
-            signal.status === 'active',
+        // Get all users subscribed to this symbol-interval pair
+        const subscribers = await this.subscriptionsService.getSubscribersForPair(
+          symbol,
+          interval,
         );
 
-        if (hasActiveSignal) {
-          console.log(`${symbol}: Active signal already exists`);
-          return;
+        // Create and send signal for each subscriber
+        for (const userId of subscribers) {
+          const activeSignals = await this.signalsService.getActiveSignals(userId);
+          const hasActiveSignal = activeSignals.some(
+            (signal) =>
+              signal.symbol === symbol &&
+              signal.interval === interval &&
+              signal.status === 'active',
+          );
+
+          if (hasActiveSignal) {
+            console.log(`${symbol}: Active signal already exists for user ${userId}`);
+            continue;
+          }
+
+          const signalType = isLongSignal
+            ? '📈 Сигнал на открытие лонга'
+            : '📉 Сигнал на открытие шорта';
+          const formattedSymbol = formatSymbolForMarkdown(symbol);
+          const signalContent =
+            `**${formattedSymbol}**\n` +
+            `**${signalType}**\n` +
+            `Цена: ${currentClosePrice}\n` +
+            `TP: ${config.profit}%`;
+
+          const messageId = await this.telegramService.sendInfoNotification(
+            'Новый торговый сигнал',
+            signalContent,
+            userId,
+          );
+
+          const signal = new Signal();
+          signal.symbol = symbol;
+          signal.interval = interval;
+          signal.entryPrice = currentPrice;
+          signal.entryTime = currentTime;
+          signal.type = isLongSignal ? 'long' : 'short';
+          signal.active = true;
+          signal.maxProfit = 0;
+          signal.notified = false;
+          signal.messageId = messageId;
+          signal.status = 'active';
+          signal.takeProfit = currentPrice * (1 + config.profit / 100);
+          signal.timestamp = Date.now();
+          signal.exitPrice = null;
+          signal.exitTimestamp = null;
+          signal.profitLoss = null;
+          signal.validityHours = config.validityHours;
+          signal.userId = userId;
+
+          await this.signalsService.createSignal(signal, userId);
         }
-
-        const signalType = isLongSignal
-          ? '📈 Сигнал на открытие лонга'
-          : '📉 Сигнал на открытие шорта';
-        const formattedSymbol = formatSymbolForMarkdown(symbol);
-        const signalContent =
-          `**${formattedSymbol}**\n` +
-          `**${signalType}**\n` +
-          `Цена: ${currentClosePrice}\n` +
-          `TP: ${config.profit}%`;
-
-        const messageId = await this.telegramService.sendInfoNotification(
-          'Новый торговый сигнал',
-          signalContent,
-          this.channelId,
-        );
-
-        const signal = new Signal();
-        signal.symbol = symbol;
-        signal.interval = this.INTERVAL;
-        signal.entryPrice = currentPrice;
-        signal.entryTime = currentTime;
-        signal.type = isLongSignal ? 'long' : 'short';
-        signal.active = true;
-        signal.maxProfit = 0;
-        signal.notified = false;
-        signal.messageId = messageId;
-        signal.status = 'active';
-        signal.takeProfit = currentPrice * (1 + config.profit / 100);
-        signal.timestamp = Date.now();
-        signal.exitPrice = null;
-        signal.exitTimestamp = null;
-        signal.profitLoss = null;
-        signal.validityHours = config.validityHours;
-        signal.userId = this.channelId;
-
-        await this.signalsService.createSignal(signal, this.channelId);
       } else {
         console.log(
           `${symbol}: [handleMacdSignal] Нет сигнала для открытия позиции. MACD малого таймфрейма: ${currentSign}, MACD большого таймфрейма: ${higherTimeframeHistogram.toFixed(6)}`,
