@@ -1,11 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { RestClientV5, KlineIntervalV3, GetTickersParamsV5 } from 'bybit-api';
+import { GetTickersParamsV5, KlineIntervalV3, RestClientV5 } from 'bybit-api';
 import { TelegramService } from '../telegram/telegram.service';
 import { calculateSmoothedSMA } from '../trading-bot/utils/sma.utils';
 import * as dayjs from 'dayjs';
 import { Candle } from '../trading-bot/types';
-import { formatSymbolForMarkdown } from '../telegram/telegram.utils';
 
 @Injectable()
 export class BybitService {
@@ -36,6 +35,7 @@ export class BybitService {
         category: 'inverse',
       });
 
+      console.log(response, 'getTopVolumeCoins');
       if (!response || !response.result?.list) {
         console.error('Некорректный ответ от Bybit при получении списка монет');
         return [];
@@ -62,7 +62,7 @@ export class BybitService {
     limit: number,
   ): Promise<{ candles: Candle[]; smoothedSMA: number | null }> {
     try {
-      const formattedSymbol = symbol.endsWith('T') ? symbol : `${symbol}T`
+      const formattedSymbol = symbol.endsWith('T') ? symbol : `${symbol}T`;
       const response = await this.restClient.getKline({
         symbol: formattedSymbol,
         interval,
@@ -80,10 +80,11 @@ export class BybitService {
           `Invalid response from Bybit for ${formattedSymbol}:`,
           JSON.stringify(response, null, 2),
         );
-        await this.telegramService.sendNotification(
-          'error',
-          `Некорректный ответ от Bybit при получении свечей для ${formatSymbolForMarkdown(formattedSymbol)}.`,
-        );
+        await this.telegramService.sendErrorNotification({
+          error: new Error('Invalid response from Bybit'),
+          context: `Некорректный ответ от Bybit при получении свечей для ${formattedSymbol}`,
+          userId: this.configService.get<string>('TELEGRAM_CHANNEL_ID', ''),
+        });
         return { candles: [], smoothedSMA: null };
       }
 
@@ -111,10 +112,6 @@ export class BybitService {
       return { candles: list, smoothedSMA };
     } catch (error) {
       console.error(`Ошибка при запросе свечей для ${symbol}:`, error);
-      await this.telegramService.sendNotification(
-        'error',
-        `Ошибка при запросе свечей для ${formatSymbolForMarkdown(symbol)}: ${error}`,
-      );
       return { candles: [], smoothedSMA: null };
     }
   }

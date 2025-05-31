@@ -3,35 +3,38 @@ import { KlineIntervalV3 } from 'bybit-api';
 /**
  * Supported intervals and their configurations
  */
-export const SUPPORTED_INTERVALS = {
-  '1m': { minutes: 1, profit: 0.6, validityHours: 1 },
-  '3m': { minutes: 3, profit: 0.8, validityHours: 1 },
-  '5m': { minutes: 5, profit: 1, validityHours: 1 },
-  '15m': { minutes: 15, profit: 1.5, validityHours: 2 },
-  '30m': { minutes: 30, profit: 2, validityHours: 2 },
-  '1h': { minutes: 60, profit: 2.5, validityHours: 4 },
-  '2h': { minutes: 120, profit: 3, validityHours: 8 },
-  '4h': { minutes: 240, profit: 3.5, validityHours: 16 },
-  '6h': { minutes: 360, profit: 4, validityHours: 32 },
-  '1d': { minutes: 1440, profit: 5, validityHours: 96 },
-  '1w': { minutes: 10080, profit: 8, validityHours: 168 },
-  '1M': { minutes: 43200, profit: 10, validityHours: 720 },
+export const SUPPORTED_INTERVALS: Record<
+  string,
+  { klineInterval: KlineIntervalV3; profit: number; validityHours: number }
+> = {
+  '1m': { klineInterval: '1', profit: 0.6, validityHours: 1 },
+  '3m': { klineInterval: '3', profit: 0.8, validityHours: 1 },
+  '5m': { klineInterval: '5', profit: 1, validityHours: 1 },
+  '15m': { klineInterval: '15', profit: 1.5, validityHours: 2 },
+  '30m': { klineInterval: '30', profit: 2, validityHours: 2 },
+  '1h': { klineInterval: '60', profit: 2.5, validityHours: 4 },
+  '2h': { klineInterval: '120', profit: 3, validityHours: 8 },
+  '4h': { klineInterval: '240', profit: 3.5, validityHours: 16 },
+  '6h': { klineInterval: '360', profit: 4, validityHours: 32 },
+  '1d': { klineInterval: 'D', profit: 5, validityHours: 96 },
+  '1w': { klineInterval: 'W', profit: 8, validityHours: 168 },
+  '1M': { klineInterval: 'M', profit: 10, validityHours: 720 },
 } as const;
 
 export const HIGHER_TIMEFRAME_MAP: Partial<
-  Record<KlineIntervalV3, KlineIntervalV3>
+  Record<keyof typeof SUPPORTED_INTERVALS, KlineIntervalV3>
 > = {
-  '1': '3',
-  '3': '5',
-  '5': '15',
-  '15': '30',
-  '30': '60',
-  '60': '120',
-  '120': '240',
-  '240': '360',
-  '360': 'D',
-  D: 'W',
-  W: 'M',
+  '1m': '3',
+  '3m': '5',
+  '5m': '15',
+  '15m': '30',
+  '30m': '60',
+  '1h': '120',
+  '2h': '240',
+  '4h': '360',
+  '6h': 'D',
+  '1d': 'W',
+  '1w': 'M',
 };
 
 export type SupportedInterval = keyof typeof SUPPORTED_INTERVALS;
@@ -52,7 +55,7 @@ export const isValidInterval = (interval: string): boolean => {
  * @throws Error if interval format is invalid or not supported
  */
 export const validateAndNormalizeInterval = (interval: string): string => {
-  const normalizedInterval = interval.toLowerCase() as SupportedInterval;
+  const normalizedInterval = interval.toLowerCase();
   if (!isValidInterval(normalizedInterval)) {
     throw new Error(
       'Invalid interval format. Supported intervals: ' +
@@ -73,9 +76,7 @@ export const getIntervalConfig = (
 ): { profit: number; validityHours: number } => {
   const normalizedInterval = validateAndNormalizeInterval(interval);
   return {
-    profit: SUPPORTED_INTERVALS[normalizedInterval as SupportedInterval].profit,
-    validityHours:
-      SUPPORTED_INTERVALS[normalizedInterval as SupportedInterval]
-        .validityHours,
+    profit: SUPPORTED_INTERVALS[normalizedInterval].profit,
+    validityHours: SUPPORTED_INTERVALS[normalizedInterval].validityHours,
   };
 };

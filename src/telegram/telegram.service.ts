@@ -3,9 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { InjectBot } from 'nestjs-telegraf';
 import { Telegraf, Context } from 'telegraf';
 import {
-  formatErrorForMarkdown,
-  formatHeaderForMarkdown,
-  escapeMarkdownV2,
+  formatErrorForHtml,
+  formatHeaderForHtml,
   parseSubscriptionMessage,
 } from './telegram.utils';
 import { SubscriptionsService } from '../trading-bot/subscriptions/subscriptions.service';
@@ -88,7 +87,7 @@ export class TelegramService implements OnModuleInit {
     try {
       const helpMessage = this.formatHelpMessage();
       await ctx.reply(helpMessage, {
-        parse_mode: 'Markdown',
+        parse_mode: 'HTML',
         ...this.mainKeyboard,
       });
     } catch (error) {
@@ -105,7 +104,7 @@ export class TelegramService implements OnModuleInit {
       const helpMessage = this.formatHelpMessage();
 
       await ctx.editMessageText(helpMessage, {
-        parse_mode: 'Markdown',
+        parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
             [{ text: '🔙 Назад', callback_data: 'back_to_welcome' }],
@@ -123,16 +122,16 @@ export class TelegramService implements OnModuleInit {
     const supportedIntervals = Object.keys(SUPPORTED_INTERVALS).join(', ');
 
     return (
-      '📘 *Список команд*\n\n' +
-      '🔹 *Подписка на сигналы:*\n' +
-      '• `/subscribe SYMBOL INTERVAL` — подписаться\n' +
-      '  _Пример:_ `/subscribe SUIUSDT 15m`\n\n' +
-      '🔹 *Управление подписками:*\n' +
-      '• `/subscriptions` — список активных подписок\n' +
-      '• `/unsubscribe SYMBOL INTERVAL` — отключить подписку\n' +
-      '  _Пример:_ `/unsubscribe SUIUSDT 15m`\n' +
-      '• `/clearall` — отключить все подписки\n\n' +
-      'ℹ️ *Информация:*\n' +
+      '<b>📘 Список команд</b>\n\n' +
+      '<b>🔹 Подписка на сигналы:</b>\n' +
+      '• <code>/subscribe SYMBOL INTERVAL</code> — подписаться\n' +
+      '  <i>Пример:</i> <code>/subscribe SUIUSDT 15m</code>\n\n' +
+      '<b>🔹 Управление подписками:</b>\n' +
+      '• <code>/subscriptions</code> — список активных подписок\n' +
+      '• <code>/unsubscribe SYMBOL INTERVAL</code> — отключить подписку\n' +
+      '  <i>Пример:</i> <code>/unsubscribe SUIUSDT 15m</code>\n' +
+      '• <code>/clearall</code> — отключить все подписки\n\n' +
+      '<b>ℹ️ Информация:</b>\n' +
       '• Символы берем из названий фьючерсных контрактов на бирже Bybit\n' +
       '• Поддерживаемые интервалы:\n' +
       supportedIntervals
@@ -261,10 +260,11 @@ export class TelegramService implements OnModuleInit {
         .join('\n\n');
 
       await ctx.reply(
-        '📋 Ваши активные подписки:\n\n' +
+        '<b>📋 Ваши активные подписки:</b>\n\n' +
           message +
           '\n\nЧтобы добавить еще, отправьте сообщение с символом и интервалом (например: SUIUSDT 15m)',
         {
+          parse_mode: 'HTML',
           ...this.mainKeyboard,
           reply_markup: {
             inline_keyboard: [
@@ -445,18 +445,16 @@ export class TelegramService implements OnModuleInit {
     }
 
     try {
-      // Escape the entire message including prefix before sending
-      const escapedMessage = escapeMarkdownV2(prefix + message);
       console.log(`[TELEGRAM] ${message}`); // Log original message for debugging
       const result = await this.bot.telegram.sendMessage(
         userId,
-        escapedMessage,
-        { parse_mode: 'MarkdownV2' },
+        prefix + message,
+        { parse_mode: 'HTML' },
       );
       return result.message_id;
     } catch (err) {
       console.error('Ошибка отправки уведомления в Telegram:', err);
-      // If message formatting fails, try sending without markdown
+      // If message formatting fails, try sending without formatting
       try {
         const fallbackMessage =
           prefix +
@@ -494,16 +492,14 @@ export class TelegramService implements OnModuleInit {
     }
 
     try {
-      // Escape the entire message including prefix before sending
-      const escapedMessage = escapeMarkdownV2(prefix + message);
       console.log(`[TELEGRAM] Reply to ${replyToMessageId}: ${message}`); // Log original message
       const result = await this.bot.telegram.sendMessage(
         userId,
-        escapedMessage,
+        prefix + message,
         {
           reply_to_message_id: replyToMessageId,
           allow_sending_without_reply: true,
-          parse_mode: 'MarkdownV2',
+          parse_mode: 'HTML',
         } as any,
       );
       return result.message_id;
@@ -526,33 +522,30 @@ export class TelegramService implements OnModuleInit {
     context?: string;
     userId: string;
   }): Promise<number> {
-    const errorMessage = formatErrorForMarkdown(error);
+    const errorMessage = formatErrorForHtml(error);
     const message = context
-      ? `${formatHeaderForMarkdown(context)}\n${errorMessage}`
+      ? `${formatHeaderForHtml(context)}\n${errorMessage}`
       : errorMessage;
     return this.sendNotification('error', message, userId);
   }
 
-  /**
-   * Formats and sends an info notification with a header
-   * @param header The header text
-   * @param content The content text
-   * @returns Message ID
-   */
   async sendInfoNotification(
-    header: string,
+    title: string,
     content: string,
-    userId,
+    userId: string,
   ): Promise<number> {
-    // Format header and content without escaping
-    const formattedHeader = formatHeaderForMarkdown(header);
-    const message = `${formattedHeader}\n${content}`;
-    return this.sendNotification('info', message, userId);
+    const message = `${formatHeaderForHtml(title)}\n\n${content}`;
+    const response = await this.bot.telegram.sendMessage(userId, message, {
+      parse_mode: 'HTML',
+    });
+    return response.message_id;
   }
 
   async sendDirectMessage(userId: string, message: string): Promise<number> {
     try {
-      const result = await this.bot.telegram.sendMessage(userId, message);
+      const result = await this.bot.telegram.sendMessage(userId, message, {
+        parse_mode: 'HTML',
+      });
       return result.message_id;
     } catch (error) {
       console.error(`Failed to send direct message to ${userId}:`, error);

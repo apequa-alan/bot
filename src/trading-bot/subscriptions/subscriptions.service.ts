@@ -1,4 +1,4 @@
-import { Injectable, Inject, forwardRef } from '@nestjs/common';
+import { forwardRef, Inject, Injectable } from '@nestjs/common';
 import { Subscription } from '../entities/subscription.entity';
 import { SubscriptionsRepository } from './subscriptions.repository';
 import { TradingBotService } from '../trading-bot.service';
@@ -110,13 +110,16 @@ export class SubscriptionsService {
     await this.tradingBotService.handleSubscriptionChange();
   }
 
-  async getSubscribersForPair(symbol: string, interval: string): Promise<string[]> {
+  async getSubscribersForPair(
+    symbol: string,
+    interval: string,
+  ): Promise<string[]> {
     const subscriptions = await this.repository.find({
       symbol,
       interval,
       active: true,
     });
 
-    return subscriptions.map(sub => sub.userId);
+    return subscriptions.map((sub) => sub.userId);
   }
 }

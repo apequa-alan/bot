@@ -32,10 +32,16 @@ export class SignalsDatabaseService {
     );
   }
 
-  async getActiveSignals(userId: string): Promise<Signal[]> {
-    return this.signalsRepository.find({
-      where: { status: 'active', userId },
-    });
+  async getActiveSignals(userId?: string): Promise<Signal[]> {
+    return this.signalsRepository.find(
+      userId
+        ? {
+            where: { status: 'active', userId },
+          }
+        : {
+            where: { status: 'active' },
+          },
+    );
   }
 
   async getSignalStats(userId: string): Promise<any[]> {

@@ -1,7 +1,7 @@
-import { Injectable, OnModuleInit, Inject, forwardRef } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as dayjs from 'dayjs';
-import { WebsocketClient, KlineIntervalV3 } from 'bybit-api';
+import { KlineIntervalV3, WebsocketClient } from 'bybit-api';
 import { TelegramService } from '../telegram/telegram.service';
 import { BybitService } from '../bybit/bybit.service';
 import { calculateMACD } from './utils/macd.utils';
@@ -12,8 +12,8 @@ import { SignalsService } from '../signals/signals.service';
 import { Signal } from '../signals/entities/signal.entity';
 import { SubscriptionsService } from './subscriptions/subscriptions.service';
 import {
-  formatSymbolForMarkdown,
-  formatHeaderForMarkdown,
+  formatHeaderForHtml,
+  formatSymbolForHtml,
 } from '../telegram/telegram.utils';
 import {
   HIGHER_TIMEFRAME_MAP,
@@ -56,7 +56,7 @@ export class TradingBotService implements OnModuleInit {
       this.configService.get<string>('BYBIT_API_SECRET') ?? '';
     this.INTERVAL = this.configService.get<string>(
       'INTERVAL',
-      '1',
+      '1m',
     ) as KlineIntervalV3;
     this.FAST_PERIOD = this.configService.get<string>('FAST_PERIOD', '12');
     this.SLOW_PERIOD = this.configService.get<string>('SLOW_PERIOD', '26');
@@ -88,9 +88,11 @@ export class TradingBotService implements OnModuleInit {
       const newTopCoins = await this.bybitService.getTopVolumeCoins(
         this.TOP_VOLUME_COINS_COUNT,
       );
-      
+
       if (newTopCoins.length === 0) {
-        console.error('Не удалось получить новый список монет для отслеживания');
+        console.error(
+          'Не удалось получить новый список монет для отслеживания',
+        );
         return;
       }
 
@@ -115,11 +117,6 @@ export class TradingBotService implements OnModuleInit {
   }
 
   private validateInterval(interval: string): KlineIntervalV3 {
-    // Check if interval is a number
-    if (!SUPPORTED_INTERVALS[interval]) {
-      throw new Error(`Invalid interval: ${interval}.`);
-    }
-
     // Check if interval is in valid intervals
     if (!this.VALID_INTERVALS.includes(interval as KlineIntervalV3)) {
       throw new Error(
@@ -127,7 +124,7 @@ export class TradingBotService implements OnModuleInit {
       );
     }
 
-    return SUPPORTED_INTERVALS[interval] as KlineIntervalV3;
+    return SUPPORTED_INTERVALS[interval].klineInterval;
   }
 
   private async updateSubscriptions() {
@@ -135,6 +132,7 @@ export class TradingBotService implements OnModuleInit {
       const subscriptions =
         await this.subscriptionsService.getAllActiveSubscriptions();
       const uniquePairs = new Set<string>();
+      console.log(subscriptions, 'subscriptions');
 
       // Get unique symbol-interval pairs
       for (const sub of subscriptions) {
@@ -158,7 +156,7 @@ export class TradingBotService implements OnModuleInit {
       for (const pair of uniquePairs) {
         if (!this.activeSubscriptions.has(pair)) {
           const [symbol, interval] = pair.split('-');
-          const validInterval = this.validateInterval(interval);
+          const validInterval = this.validateInterval(`${interval}m`);
 
           // Fetch candles before subscribing
           const { candles, smoothedSMA } =
@@ -168,7 +166,6 @@ export class TradingBotService implements OnModuleInit {
               limit,
             );
 
-          // Initialize data for new symbol-interval pair
           this.symbolData.set(pair, {
             symbol,
             interval: validInterval,
@@ -186,11 +183,6 @@ export class TradingBotService implements OnModuleInit {
       }
     } catch (error) {
       console.error('Error updating subscriptions:', error);
-      await this.telegramService.sendErrorNotification({
-        error,
-        context: 'Ошибка при обновлении подписок',
-        userId: this.channelId,
-      });
     }
   }
 
@@ -204,6 +196,7 @@ export class TradingBotService implements OnModuleInit {
       const newTopCoins = await this.bybitService.getTopVolumeCoins(
         this.TOP_VOLUME_COINS_COUNT,
       );
+      console.log(newTopCoins, 'newTopCoins');
       if (newTopCoins.length === 0) {
         console.error(
           'Не удалось получить новый список монет для отслеживания',
@@ -531,14 +524,16 @@ export class TradingBotService implements OnModuleInit {
         const config = this.getProfitConfig();
 
         // Get all users subscribed to this symbol-interval pair
-        const subscribers = await this.subscriptionsService.getSubscribersForPair(
-          symbol,
-          interval,
-        );
+        const subscribers =
+          await this.subscriptionsService.getSubscribersForPair(
+            symbol,
+            interval,
+          );
 
         // Create and send signal for each subscriber
         for (const userId of subscribers) {
-          const activeSignals = await this.signalsService.getActiveSignals(userId);
+          const activeSignals =
+            await this.signalsService.getActiveSignals(userId);
           const hasActiveSignal = activeSignals.some(
             (signal) =>
               signal.symbol === symbol &&
@@ -547,17 +542,19 @@ export class TradingBotService implements OnModuleInit {
           );
 
           if (hasActiveSignal) {
-            console.log(`${symbol}: Active signal already exists for user ${userId}`);
+            console.log(
+              `${symbol}: Active signal already exists for user ${userId}`,
+            );
             continue;
           }
 
           const signalType = isLongSignal
             ? '📈 Сигнал на открытие лонга'
             : '📉 Сигнал на открытие шорта';
-          const formattedSymbol = formatSymbolForMarkdown(symbol);
+          const formattedSymbol = formatSymbolForHtml(symbol);
           const signalContent =
-            `**${formattedSymbol}**\n` +
-            `**${signalType}**\n` +
+            `${formattedSymbol}\n` +
+            `<b>${signalType}</b>\n` +
             `Цена: ${currentClosePrice}\n` +
             `TP: ${config.profit}%`;
 
@@ -610,7 +607,7 @@ export class TradingBotService implements OnModuleInit {
       const stats = await this.signalsService.getSignalStats(this.channelId);
 
       // Format the daily report
-      const reportHeader = formatHeaderForMarkdown(
+      const reportHeader = formatHeaderForHtml(
         '📊 Ежедневный отчет по сигналам',
       );
       let reportContent = '';
@@ -620,8 +617,10 @@ export class TradingBotService implements OnModuleInit {
       let totalProfitable = 0;
 
       for (const stat of stats) {
-        totalSignals += Number(stat.total_signals);
-        totalProfitable += Number(stat.profitable_signals);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        totalSignals += Number(stat?.total_signals ?? 0);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        totalProfitable += Number(stat?.profitable_signals ?? 0);
       }
 
       const overallSuccessRate =

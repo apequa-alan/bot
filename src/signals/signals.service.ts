@@ -95,11 +95,12 @@ export class SignalsService {
           `Текущая цена: ${currentPrice}\n` +
           `Доходность: ${profitLoss.toFixed(2)}%`,
         signal.messageId,
+        signal.userId,
       );
     }
   }
 
-  async getActiveSignals(userId: string): Promise<Signal[]> {
+  async getActiveSignals(userId?: string): Promise<Signal[]> {
     return this.signalsDb.getActiveSignals(userId);
   }
 
@@ -124,7 +125,7 @@ export class SignalsService {
     lowPrice: number;
     profitConfig: { profit: number; validityHours: number };
   }): Promise<void> {
-    const activeSignals = await this.getActiveSignals();
+    const activeSignals = await this.getActiveSignals(symbol);
     const symbolSignals = activeSignals.filter(
       (signal) => signal.symbol === symbol && signal.status === 'active',
     );
