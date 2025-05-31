@@ -9,6 +9,7 @@ import { SignalsModule } from './signals/signals.module';
 import { Signal } from './signals/entities/signal.entity';
 import { Subscription } from './trading-bot/entities/subscription.entity';
 import { SubscriptionsModule } from './trading-bot/subscriptions/subscriptions.module';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { SubscriptionsModule } from './trading-bot/subscriptions/subscriptions.m
       synchronize: false,
     }),
     ScheduleModule.forRoot(),
+    EventEmitterModule.forRoot(),
     TradingBotModule,
     TelegramModule,
     BybitModule,

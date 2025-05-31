@@ -6,6 +6,9 @@ export class Signal {
   id: string;
 
   @Column()
+  userId: string;
+
+  @Column()
   symbol: string;
 
   @Column()
@@ -29,7 +32,7 @@ export class Signal {
   @Column('float', { nullable: true })
   exitPrice: number | null;
 
-  @Column({ nullable: true, type: 'timestamp' })
+  @Column({ nullable: true, type: 'datetime' })
   exitTimestamp: Date | null;
 
   @Column('float', { nullable: true })

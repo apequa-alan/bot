@@ -14,13 +14,16 @@ export class SignalBroadcastService {
   async broadcastSignal(signal: Signal): Promise<void> {
     try {
       // Get all active subscribers for this symbol and interval
-      const subscribers = await this.subscriptionsService.getActiveSubscribersForSymbolInterval(
-        signal.symbol,
-        signal.interval,
-      );
+      const subscribers =
+        await this.subscriptionsService.getActiveSubscribersForSymbolInterval(
+          signal.symbol,
+          signal.interval,
+        );
 
       if (subscribers.length === 0) {
-        console.log(`No active subscribers found for ${signal.symbol} ${signal.interval}`);
+        console.log(
+          `No active subscribers found for ${signal.symbol} ${signal.interval}`,
+        );
         return;
       }
 
@@ -31,8 +34,11 @@ export class SignalBroadcastService {
       for (const subscriber of subscribers) {
         const takeProfit = subscriber.takeProfit ?? defaultProfit;
         const message = this.formatSignalMessage(signal, takeProfit);
-        
-        await this.telegramService.sendDirectMessage(subscriber.userId, message);
+
+        await this.telegramService.sendDirectMessage(
+          subscriber.userId,
+          message,
+        );
       }
 
       console.log(`Signal broadcasted to ${subscribers.length} subscribers`);
@@ -44,19 +50,32 @@ export class SignalBroadcastService {
 
   private formatSignalMessage(signal: Signal, takeProfit: number): string {
     const direction = signal.type === 'long' ? '🟢 LONG' : '🔴 SHORT';
-    const takeProfitPrice = this.calculateTakeProfit(signal.entryPrice, takeProfit, signal.type);
-    const validityText = signal.validityHours ? `\nСрок действия: ${signal.validityHours} ч.` : '';
-    
-    return `🚨 *Новый сигнал*\n\n` +
+    const takeProfitPrice = this.calculateTakeProfit(
+      signal.entryPrice,
+      takeProfit,
+      signal.type,
+    );
+    const validityText = signal.validityHours
+      ? `\nСрок действия: ${signal.validityHours} ч.`
+      : '';
+
+    return (
+      `🚨 *Новый сигнал*\n\n` +
       `*${direction}* ${signal.symbol}\n` +
       `Интервал: ${signal.interval}\n` +
       `Вход: ${signal.entryPrice}\n` +
       `Take Profit: ${takeProfit}% (${takeProfitPrice})${validityText}\n\n` +
-      `⚠️ Риск-менеджмент обязателен!`;
+      `⚠️ Риск-менеджмент обязателен!`
+    );
   }
 
-  private calculateTakeProfit(entryPrice: number, profitPercent: number, type: 'long' | 'short'): number {
-    const multiplier = type === 'long' ? 1 + profitPercent / 100 : 1 - profitPercent / 100;
+  private calculateTakeProfit(
+    entryPrice: number,
+    profitPercent: number,
+    type: 'long' | 'short',
+  ): number {
+    const multiplier =
+      type === 'long' ? 1 + profitPercent / 100 : 1 - profitPercent / 100;
     return Number((entryPrice * multiplier).toFixed(8));
   }
-} 
+}

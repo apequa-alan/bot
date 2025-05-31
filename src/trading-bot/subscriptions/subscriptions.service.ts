@@ -1,10 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { Subscription } from '../entities/subscription.entity';
 import { SubscriptionsRepository } from './subscriptions.repository';
+import { TradingBotService } from '../trading-bot.service';
 
 @Injectable()
 export class SubscriptionsService {
-  constructor(private readonly repository: SubscriptionsRepository) {}
+  constructor(
+    private readonly repository: SubscriptionsRepository,
+    @Inject(forwardRef(() => TradingBotService))
+    private readonly tradingBotService: TradingBotService,
+  ) {}
 
   async createOrUpdateSubscription(
     userId: string,
@@ -12,14 +17,20 @@ export class SubscriptionsService {
     interval: string,
     takeProfit?: number,
   ): Promise<Subscription> {
-    const existingSubscription = await this.repository.findOne(userId, symbol, interval);
+    const existingSubscription = await this.repository.findOne(
+      userId,
+      symbol,
+      interval,
+    );
 
     if (existingSubscription) {
       existingSubscription.active = true;
       if (takeProfit !== undefined) {
         existingSubscription.takeProfit = takeProfit;
       }
-      return this.repository.save(existingSubscription);
+      const updated = await this.repository.save(existingSubscription);
+      await this.tradingBotService.handleSubscriptionChange();
+      return updated;
     }
 
     const newSubscription = new Subscription();
@@ -29,7 +40,9 @@ export class SubscriptionsService {
     newSubscription.takeProfit = takeProfit ?? null;
     newSubscription.active = true;
 
-    return this.repository.save(newSubscription);
+    const created = await this.repository.save(newSubscription);
+    await this.tradingBotService.handleSubscriptionChange();
+    return created;
   }
 
   async deactivateSubscription(
@@ -37,16 +50,25 @@ export class SubscriptionsService {
     symbol: string,
     interval: string,
   ): Promise<Subscription | null> {
-    const subscription = await this.repository.findOne(userId, symbol, interval);
+    const subscription = await this.repository.findOne(
+      userId,
+      symbol,
+      interval,
+    );
     if (!subscription) {
       return null;
     }
 
     subscription.active = false;
-    return this.repository.save(subscription);
+    const updated = await this.repository.save(subscription);
+    await this.tradingBotService.handleSubscriptionChange();
+    return updated;
   }
 
-  async getSubscribersForSignal(symbol: string, interval: string): Promise<Subscription[]> {
+  async getSubscribersForSignal(
+    symbol: string,
+    interval: string,
+  ): Promise<Subscription[]> {
     return this.repository.findActiveBySymbolAndInterval(symbol, interval);
   }
 
@@ -67,4 +89,24 @@ export class SubscriptionsService {
       active: true,
     });
   }
-} 
+
+  async getAllActiveSubscriptions(): Promise<Subscription[]> {
+    return this.repository.find({
+      active: true,
+    });
+  }
+
+  async deactivateAllUserSubscriptions(userId: string): Promise<void> {
+    const subscriptions = await this.repository.find({
+      userId,
+      active: true,
+    });
+
+    for (const subscription of subscriptions) {
+      subscription.active = false;
+      await this.repository.save(subscription);
+    }
+
+    await this.tradingBotService.handleSubscriptionChange();
+  }
+}

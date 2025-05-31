@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as dayjs from 'dayjs';
 import { WebsocketClient, KlineIntervalV3 } from 'bybit-api';
@@ -6,47 +6,34 @@ import { TelegramService } from '../telegram/telegram.service';
 import { BybitService } from '../bybit/bybit.service';
 import { calculateMACD } from './utils/macd.utils';
 import { calculateSmoothedSMA } from './utils/sma.utils';
-import {
-  SymbolData,
-  WsKlineV5,
-  TimeframeConfig,
-} from './types';
+import { SymbolData, WsKlineV5 } from './types';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SignalsService } from '../signals/signals.service';
 import { Signal } from '../signals/entities/signal.entity';
+import { SubscriptionsService } from './subscriptions/subscriptions.service';
 import {
-  formatNumberForMarkdown,
-  formatPercentageForMarkdown,
   formatSymbolForMarkdown,
   formatHeaderForMarkdown,
 } from '../telegram/telegram.utils';
+import {
+  HIGHER_TIMEFRAME_MAP,
+  SUPPORTED_INTERVALS,
+} from './utils/interval.utils';
 
 const limit = 300;
 
 @Injectable()
 export class TradingBotService implements OnModuleInit {
   private ws: WebsocketClient;
-  private symbolData: Map<string, SymbolData> = new Map();
+  private readonly channelId: string;
+  private readonly symbolData: Map<string, SymbolData> = new Map();
+  private activeSubscriptions: Set<string> = new Set();
   private readonly TOP_VOLUME_COINS_COUNT = 10;
-  private readonly ONE_HISTOGRAM_DIRECTION_CANDLES = 5;
+  private readonly ONE_HISTOGRAM_DIRECTION_CANDLES = 3;
 
-  // Configure profit and validity hours for each timeframe
-  private readonly TIMEFRAME_CONFIG: Partial<
-    Record<KlineIntervalV3, TimeframeConfig>
-  > = {
-    '1': { profit: 0.6, validityHours: 1 },
-    '3': { profit: 0.8, validityHours: 1 },
-    '5': { profit: 1, validityHours: 1 },
-    '15': { profit: 1.5, validityHours: 2 },
-    '30': { profit: 2, validityHours: 2 },
-    '60': { profit: 2.5, validityHours: 4 },
-    '120': { profit: 3, validityHours: 8 },
-    '240': { profit: 3.5, validityHours: 16 },
-    '360': { profit: 4, validityHours: 32 },
-    D: { profit: 5, validityHours: 96 },
-    W: { profit: 8, validityHours: 168 },
-    M: { profit: 10, validityHours: 720 },
-  };
+  private readonly VALID_INTERVALS: KlineIntervalV3[] = Object.keys(
+    SUPPORTED_INTERVALS,
+  ) as KlineIntervalV3[];
 
   private readonly BYBIT_API_KEY: string;
   private readonly BYBIT_API_SECRET: string;
@@ -56,27 +43,13 @@ export class TradingBotService implements OnModuleInit {
   private readonly SIGNAL_PERIOD: string;
   private readonly VOLUME_SMA_SMOOTHING_PERIOD: string;
 
-  private readonly HIGHER_TIMEFRAME_MAP: Partial<
-    Record<KlineIntervalV3, KlineIntervalV3>
-  > = {
-    '1': '5',
-    '3': '15',
-    '5': '15',
-    '15': '60',
-    '30': '120',
-    '60': '240',
-    '120': '240',
-    '240': 'D',
-    '360': 'D',
-    D: 'W',
-    W: 'M',
-  };
-
   constructor(
     private readonly configService: ConfigService,
     private readonly telegramService: TelegramService,
     private readonly bybitService: BybitService,
     private readonly signalsService: SignalsService,
+    @Inject(forwardRef(() => SubscriptionsService))
+    private readonly subscriptionsService: SubscriptionsService,
   ) {
     this.BYBIT_API_KEY = this.configService.get<string>('BYBIT_API_KEY') ?? '';
     this.BYBIT_API_SECRET =
@@ -92,6 +65,10 @@ export class TradingBotService implements OnModuleInit {
       'VOLUME_SMA_SMOOTHING_PERIOD',
       '9',
     );
+    this.channelId = this.configService.get<string>('TELEGRAM_CHANNEL_ID', '');
+    if (!this.channelId) {
+      throw new Error('TELEGRAM_CHANNEL_ID не задан в .env');
+    }
   }
 
   async onModuleInit() {
@@ -102,6 +79,89 @@ export class TradingBotService implements OnModuleInit {
     });
 
     await this.startBot();
+    await this.updateSubscriptions();
+  }
+
+  private validateInterval(interval: string): KlineIntervalV3 {
+    // Check if interval is a number
+    if (!SUPPORTED_INTERVALS[interval]) {
+      throw new Error(`Invalid interval: ${interval}.`);
+    }
+
+    // Check if interval is in valid intervals
+    if (!this.VALID_INTERVALS.includes(interval as KlineIntervalV3)) {
+      throw new Error(
+        `Invalid interval: ${interval}. Valid intervals are: ${this.VALID_INTERVALS.join(', ')}`,
+      );
+    }
+
+    return SUPPORTED_INTERVALS[interval] as KlineIntervalV3;
+  }
+
+  private async updateSubscriptions() {
+    try {
+      const subscriptions =
+        await this.subscriptionsService.getAllActiveSubscriptions();
+      const uniquePairs = new Set<string>();
+
+      // Get unique symbol-interval pairs
+      for (const sub of subscriptions) {
+        const validInterval = this.validateInterval(sub.interval);
+        uniquePairs.add(`${sub.symbol}-${validInterval}`);
+      }
+
+      // Unsubscribe from pairs that are no longer needed
+      for (const pair of this.activeSubscriptions) {
+        if (!uniquePairs.has(pair)) {
+          const [symbol, interval] = pair.split('-');
+          const wsKlineTopicEvent = `kline.${interval}.${symbol}`;
+          this.ws.unsubscribeV5(wsKlineTopicEvent, 'linear');
+          this.activeSubscriptions.delete(pair);
+          console.log(`Unsubscribed from ${symbol} ${interval}`);
+        }
+      }
+
+      // Subscribe to new pairs
+      for (const pair of uniquePairs) {
+        if (!this.activeSubscriptions.has(pair)) {
+          const [symbol, interval] = pair.split('-');
+          const validInterval = this.validateInterval(interval);
+
+          // Fetch candles before subscribing
+          const { candles, smoothedSMA } =
+            await this.bybitService.fetchCandlesWithoutLast(
+              symbol,
+              validInterval,
+              limit,
+            );
+
+          // Initialize data for new symbol
+          this.symbolData.set(symbol, {
+            symbol,
+            candles,
+            smaVolumes: smoothedSMA !== null ? [smoothedSMA] : [],
+            prevHistogramAbs: 0,
+          });
+
+          // Subscribe to WebSocket after data is initialized
+          const wsKlineTopicEvent = `kline.${validInterval}.${symbol}`;
+          this.ws.subscribeV5(wsKlineTopicEvent, 'linear');
+          this.activeSubscriptions.add(pair);
+          console.log(`Subscribed to ${symbol} ${validInterval}`);
+        }
+      }
+    } catch (error) {
+      console.error('Error updating subscriptions:', error);
+      await this.telegramService.sendErrorNotification({
+        error,
+        context: 'Ошибка при обновлении подписок',
+        userId: this.channelId,
+      });
+    }
+  }
+
+  async handleSubscriptionChange() {
+    await this.updateSubscriptions();
   }
 
   @Cron(CronExpression.EVERY_4_HOURS)
@@ -111,52 +171,60 @@ export class TradingBotService implements OnModuleInit {
         this.TOP_VOLUME_COINS_COUNT,
       );
       if (newTopCoins.length === 0) {
-        console.error('Не удалось получить новый список монет для отслеживания');
+        console.error(
+          'Не удалось получить новый список монет для отслеживания',
+        );
         return;
       }
 
-      const currentCoins = Array.from(this.symbolData.keys());
-
-      const coinsToAdd = newTopCoins.filter(
-        (coin) => !currentCoins.includes(coin),
-      );
-      const coinsToRemove = currentCoins.filter(
-        (coin) => !newTopCoins.includes(coin),
-      );
-
-      for (const symbol of coinsToRemove) {
-        const wsKlineTopicEvent = `kline.${this.INTERVAL}.${symbol}`;
-        this.ws.unsubscribeV5(wsKlineTopicEvent, 'linear');
-        this.symbolData.delete(symbol);
-        console.log(`Прекращено отслеживание ${symbol}`);
+      // Get current subscriptions for the channel
+      const channelId = this.configService.get<string>('TELEGRAM_CHANNEL_ID');
+      if (!channelId) {
+        throw new Error('TELEGRAM_CHANNEL_ID not configured');
       }
 
-      for (const symbol of coinsToAdd) {
-        const { candles, smoothedSMA } =
-          await this.bybitService.fetchCandlesWithoutLast(
+      const currentSubscriptions =
+        await this.subscriptionsService.getUserSubscriptions(channelId);
+      const currentSymbols = currentSubscriptions.map((sub) => sub.symbol);
+
+      // Deactivate subscriptions for symbols that are no longer in top volume
+      for (const symbol of currentSymbols) {
+        if (!newTopCoins.includes(symbol)) {
+          await this.subscriptionsService.deactivateSubscription(
+            channelId,
             symbol,
             this.INTERVAL,
-            limit,
           );
-
-        this.symbolData.set(symbol, {
-          symbol,
-          candles,
-          smaVolumes: smoothedSMA !== null ? [smoothedSMA] : [],
-          prevHistogramAbs: 0,
-        });
-
-        const wsKlineTopicEvent = `kline.${this.INTERVAL}.${symbol}`;
-        this.ws.subscribeV5(wsKlineTopicEvent, 'linear');
-        console.log(`Начато отслеживание ${symbol}`);
+        }
       }
 
-      // Log changes to console only
+      // Create or activate subscriptions for new top volume symbols
+      for (const symbol of newTopCoins) {
+        await this.subscriptionsService.createOrUpdateSubscription(
+          channelId,
+          symbol,
+          this.INTERVAL,
+        );
+      }
+
+      // Log changes
+      const addedSymbols = newTopCoins.filter(
+        (symbol) => !currentSymbols.includes(symbol),
+      );
+      const removedSymbols = currentSymbols.filter(
+        (symbol) => !newTopCoins.includes(symbol),
+      );
+
       console.log('Обновлен список отслеживаемых монет:');
-      console.log('Добавлены:', coinsToAdd);
-      console.log('Удалены:', coinsToRemove);
+      console.log('Добавлены:', addedSymbols);
+      console.log('Удалены:', removedSymbols);
     } catch (error) {
       console.error('Ошибка при обновлении списка монет:', error);
+      await this.telegramService.sendErrorNotification({
+        error,
+        context: 'Ошибка при обновлении списка монет',
+        userId: this.channelId,
+      });
     }
   }
 
@@ -170,13 +238,18 @@ export class TradingBotService implements OnModuleInit {
       });
 
       this.ws.on('close', () => {
-        this.telegramService.sendNotification('error', 'WebSocket отключился.');
+        this.telegramService.sendNotification(
+          'error',
+          'WebSocket отключился.',
+          this.channelId,
+        );
       });
 
       this.ws.on('error', ((error: any) => {
         this.telegramService.sendNotification(
           'error',
           `WebSocket ошибка: ${error}`,
+          this.channelId,
         );
       }) as unknown as never);
 
@@ -188,109 +261,115 @@ export class TradingBotService implements OnModuleInit {
         console.log('WebSocket reconnected');
       });
 
-      this.ws.on('update', async (data: { topic: string; data: WsKlineV5[] }) => {
-        if (!data.topic || !data.data) return;
+      this.ws.on(
+        'update',
+        async (data: { topic: string; data: WsKlineV5[] }) => {
+          if (!data.topic || !data.data) return;
 
-        const symbol = data.topic.split('.')[2];
-        const symbolData = this.symbolData.get(symbol);
-        if (!symbolData) return;
+          const symbol = data.topic.split('.')[2];
+          const symbolData = this.symbolData.get(symbol);
+          if (!symbolData) return;
 
-        const klineArray = data.data;
-        const latestKline = klineArray[0];
-        if (!latestKline) return;
+          const klineArray = data.data;
+          const latestKline = klineArray[0];
+          if (!latestKline) return;
 
-        const close = parseFloat(latestKline.close);
-        const high = parseFloat(latestKline.high);
-        const low = parseFloat(latestKline.low);
-        const isClosed = latestKline.confirm;
-        if (!isClosed) return;
+          const close = parseFloat(latestKline.close);
+          const high = parseFloat(latestKline.high);
+          const low = parseFloat(latestKline.low);
+          const isClosed = latestKline.confirm;
+          if (!isClosed) return;
 
-        const startTime = dayjs(latestKline.start).format('YY-MM-DD HH:mm');
-        console.log(
-          `${symbol}: Новая закрытая свеча: ${startTime}, close=${close}, high=${high}, low=${low}`,
-        );
-
-        // Check for profit on active signals using high and low prices
-        await this.signalsService.checkSignalProfit(
-         {
-          symbol,
-          currentPrice: close,
-          highPrice: high,
-          lowPrice: low,
-          profitConfig: this.getProfitConfig(),
-         }
-        );
-
-        symbolData.candles.push({
-          startTime: latestKline.start.toString(),
-          openPrice: latestKline.open,
-          highPrice: latestKline.high,
-          lowPrice: latestKline.low,
-          closePrice: latestKline.close,
-          volume: latestKline.volume,
-          turnover: latestKline.turnover,
-        });
-
-        const closingPrices = symbolData.candles.map((item) =>
-          parseFloat(item.closePrice),
-        );
-        const { histogram, macdLine, signalLine } = calculateMACD(
-          closingPrices.reverse(),
-          Number(this.FAST_PERIOD),
-          Number(this.SLOW_PERIOD),
-          Number(this.SIGNAL_PERIOD),
-        );
-
-        if (histogram.length) {
-          const latestHist = histogram[histogram.length - 1];
+          const startTime = dayjs(latestKline.start).format('YY-MM-DD HH:mm');
           console.log(
-            `${symbol}: [ws update] MACD hist=${latestHist.toFixed(6)}, closePrice=${symbolData.candles[histogram.length - 1].closePrice}, closeTime=${symbolData.candles[histogram.length - 1].startTime}, (fast=${macdLine[macdLine.length - 1].toFixed(6)}, signal=${signalLine[signalLine.length - 1].toFixed(6)})`,
+            `${symbol}: Новая закрытая свеча: ${startTime}, close=${close}, high=${high}, low=${low}`,
           );
 
-          const smoothedSMA = calculateSmoothedSMA(
-            symbolData.candles.map(({ volume }) => parseFloat(volume)),
-            Number(this.VOLUME_SMA_SMOOTHING_PERIOD),
-          );
-
-          if (smoothedSMA !== null) {
-            symbolData.smaVolumes.push(smoothedSMA);
-          }
-
-          const currentSmoothedSmaVolume =
-            symbolData.smaVolumes[symbolData.smaVolumes.length - 1];
-          const previousSmoothedSmaVolume =
-            symbolData.smaVolumes[symbolData.smaVolumes.length - 2];
-          const currentVolume = parseFloat(
-            symbolData.candles[symbolData.candles.length - 1].volume,
-          );
-          const previousVolume = parseFloat(
-            symbolData.candles[symbolData.candles.length - 2].volume,
-          );
-          const increaseVolumePercent =
-            ((currentVolume - previousVolume) / previousVolume) * 100;
-
-          const openPositionCondition =
-            (increaseVolumePercent > 10 &&
-              currentSmoothedSmaVolume > previousSmoothedSmaVolume) ||
-            increaseVolumePercent > 60;
-
-          this.handleMacdSignal(
+          // Check for profit on active signals using high and low prices
+          await this.signalsService.checkSignalProfit({
             symbol,
-            latestHist,
-            openPositionCondition,
-            histogram,
-          ).catch((error) => {
-            console.error(`Error handling MACD signal for ${symbol}:`, error);
+            currentPrice: close,
+            highPrice: high,
+            lowPrice: low,
+            profitConfig: this.getProfitConfig(),
           });
-        }
-      });
+
+          symbolData.candles.push({
+            startTime: latestKline.start.toString(),
+            openPrice: latestKline.open,
+            highPrice: latestKline.high,
+            lowPrice: latestKline.low,
+            closePrice: latestKline.close,
+            volume: latestKline.volume,
+            turnover: latestKline.turnover,
+          });
+
+          const closingPrices = symbolData.candles.map((item) =>
+            parseFloat(item.closePrice),
+          );
+          const { histogram, macdLine, signalLine } = calculateMACD(
+            closingPrices.reverse(),
+            Number(this.FAST_PERIOD),
+            Number(this.SLOW_PERIOD),
+            Number(this.SIGNAL_PERIOD),
+          );
+
+          if (histogram.length) {
+            const latestHist = histogram[histogram.length - 1];
+            console.log(
+              `${symbol}: [ws update] MACD hist=${latestHist.toFixed(6)}, closePrice=${symbolData.candles[histogram.length - 1].closePrice}, closeTime=${symbolData.candles[histogram.length - 1].startTime}, (fast=${macdLine[macdLine.length - 1].toFixed(6)}, signal=${signalLine[signalLine.length - 1].toFixed(6)})`,
+            );
+
+            const smoothedSMA = calculateSmoothedSMA(
+              symbolData.candles.map(({ volume }) => parseFloat(volume)),
+              Number(this.VOLUME_SMA_SMOOTHING_PERIOD),
+            );
+
+            if (smoothedSMA !== null) {
+              symbolData.smaVolumes.push(smoothedSMA);
+            }
+
+            const currentSmoothedSmaVolume =
+              symbolData.smaVolumes[symbolData.smaVolumes.length - 1];
+            const previousSmoothedSmaVolume =
+              symbolData.smaVolumes[symbolData.smaVolumes.length - 2];
+            const currentVolume = parseFloat(
+              symbolData.candles[symbolData.candles.length - 1].volume,
+            );
+            const previousVolume = parseFloat(
+              symbolData.candles[symbolData.candles.length - 2].volume,
+            );
+            const increaseVolumePercent =
+              ((currentVolume - previousVolume) / previousVolume) * 100;
+
+            const openPositionCondition =
+              (increaseVolumePercent > 10 &&
+                currentSmoothedSmaVolume > previousSmoothedSmaVolume) ||
+              increaseVolumePercent > 60;
+
+            this.handleMacdSignal(
+              symbol,
+              latestHist,
+              openPositionCondition,
+              histogram,
+            ).catch((error) => {
+              console.error(`Error handling MACD signal for ${symbol}:`, error);
+            });
+          }
+        },
+      );
 
       await this.telegramService.sendInfoNotification(
         'Статус бота',
-        'Бот запущен и ожидает новые свечи\\.'
+        'Бот запущен и ожидает новые свечи\\.',
+        this.channelId,
       );
     } catch (error) {
-      await this.telegramService.sendErrorNotification(error, 'Ошибка при запуске бота');
+      await this.telegramService.sendErrorNotification({
+        userId: this.channelId,
+        context: 'Ошибка при запуске бота',
+        error,
+      });
     }
   }
 
@@ -303,17 +382,12 @@ export class TradingBotService implements OnModuleInit {
     const symbolData = this.symbolData.get(symbol);
     if (!symbolData) return;
 
-    // Check if symbol already has an active signal
-    const activeSignals = await this.signalsService.getActiveSignals();
-    if (activeSignals.some(signal => signal.symbol === symbol && signal.status === 'active')) {
-      console.log(`${symbol}: Уже есть активный сигнал, новый не генерируется`);
-      return;
-    }
-
     const currentHistogramAbs = Math.abs(histogramValue);
     const currentSign = Math.sign(histogramValue);
 
-    console.log(`${symbol}: [handleMacdSignal] Current histogram value: ${histogramValue.toFixed(6)}, sign: ${currentSign}`);
+    console.log(
+      `${symbol}: [handleMacdSignal] Current histogram value: ${histogramValue.toFixed(6)}, sign: ${currentSign}`,
+    );
 
     if (macdHistogram.length < this.ONE_HISTOGRAM_DIRECTION_CANDLES) {
       console.log(
@@ -327,7 +401,10 @@ export class TradingBotService implements OnModuleInit {
     const allSame = lastCandles.every(
       (value) => Math.sign(value) === currentSign,
     );
-    console.log(`${symbol}: [handleMacdSignal] Last ${this.ONE_HISTOGRAM_DIRECTION_CANDLES} candles signs:`, lastCandles.map(v => Math.sign(v)));
+    console.log(
+      `${symbol}: [handleMacdSignal] Last ${this.ONE_HISTOGRAM_DIRECTION_CANDLES} candles signs:`,
+      lastCandles.map((v) => Math.sign(v)),
+    );
     if (!allSame) {
       console.log(
         `${symbol}: [handleMacdSignal] Последние ${this.ONE_HISTOGRAM_DIRECTION_CANDLES} свечей не подтверждают единое направление MACD.`,
@@ -345,7 +422,7 @@ export class TradingBotService implements OnModuleInit {
     }
 
     if (canOpenPositionByVolume) {
-      const higherInterval = this.HIGHER_TIMEFRAME_MAP[this.INTERVAL];
+      const higherInterval = HIGHER_TIMEFRAME_MAP[this.INTERVAL];
       if (!higherInterval) {
         console.log(
           `${symbol}: No higher timeframe mapping available for interval ${this.INTERVAL}`,
@@ -412,23 +489,40 @@ export class TradingBotService implements OnModuleInit {
 
       if (isLongSignal || isShortSignal) {
         const currentPrice = parseFloat(currentClosePrice);
-        const currentTime = symbolData.candles[symbolData.candles.length - 1].startTime;
+        const currentTime =
+          symbolData.candles[symbolData.candles.length - 1].startTime;
         const config = this.getProfitConfig();
 
-        const signalType = isLongSignal ? '📈 Сигнал на открытие лонга' : '📉 Сигнал на открытие шорта';
-        const formattedSymbol = formatSymbolForMarkdown(symbol);
-        const formattedPrice = formatNumberForMarkdown(Number(currentClosePrice));
-        const formattedTP = formatPercentageForMarkdown(config.profit);
+        // Get active signals for this symbol and interval
+        const activeSignals = await this.signalsService.getActiveSignals(
+          this.channelId,
+        );
+        const hasActiveSignal = activeSignals.some(
+          (signal) =>
+            signal.symbol === symbol &&
+            signal.interval === this.INTERVAL &&
+            signal.status === 'active',
+        );
 
-        console.log(config, 'config');
-        
-        const signalContent = `${formattedSymbol} ${signalType}\n` +
-          `Цена: ${formattedPrice}\n` +
-          `TP: ${formattedTP}\n`;
+        if (hasActiveSignal) {
+          console.log(`${symbol}: Active signal already exists`);
+          return;
+        }
+
+        const signalType = isLongSignal
+          ? '📈 Сигнал на открытие лонга'
+          : '📉 Сигнал на открытие шорта';
+        const formattedSymbol = formatSymbolForMarkdown(symbol);
+        const signalContent =
+          `**${formattedSymbol}**\n` +
+          `**${signalType}**\n` +
+          `Цена: ${currentClosePrice}\n` +
+          `TP: ${config.profit}%`;
 
         const messageId = await this.telegramService.sendInfoNotification(
           'Новый торговый сигнал',
-          signalContent
+          signalContent,
+          this.channelId,
         );
 
         const signal = new Signal();
@@ -448,8 +542,9 @@ export class TradingBotService implements OnModuleInit {
         signal.exitTimestamp = null;
         signal.profitLoss = null;
         signal.validityHours = config.validityHours;
+        signal.userId = this.channelId;
 
-        await this.signalsService.createSignal(signal);
+        await this.signalsService.createSignal(signal, this.channelId);
       } else {
         console.log(
           `${symbol}: [handleMacdSignal] Нет сигнала для открытия позиции. MACD малого таймфрейма: ${currentSign}, MACD большого таймфрейма: ${higherTimeframeHistogram.toFixed(6)}`,
@@ -460,50 +555,59 @@ export class TradingBotService implements OnModuleInit {
 
   // Get profit/validity config for current timeframe
   private getProfitConfig(): { profit: number; validityHours: number } {
-    return this.TIMEFRAME_CONFIG[this.INTERVAL] || { profit: 1, validityHours: 24 };
+    return (
+      SUPPORTED_INTERVALS[this.INTERVAL] || { profit: 1, validityHours: 24 }
+    );
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   private async cleanupOldSignals() {
     try {
       // Get signal statistics
-      const stats = await this.signalsService.getSignalStats();
-      
+      const stats = await this.signalsService.getSignalStats(this.channelId);
+
       // Format the daily report
-      const reportHeader = formatHeaderForMarkdown('📊 Ежедневный отчет по сигналам');
+      const reportHeader = formatHeaderForMarkdown(
+        '📊 Ежедневный отчет по сигналам',
+      );
       let reportContent = '';
-      
+
       // Calculate overall statistics
       let totalSignals = 0;
       let totalProfitable = 0;
-      
+
       for (const stat of stats) {
         totalSignals += Number(stat.total_signals);
         totalProfitable += Number(stat.profitable_signals);
       }
-      
-      const overallSuccessRate = totalSignals > 0 ? (totalProfitable / totalSignals * 100).toFixed(2) : '0.00';
-      
+
+      const overallSuccessRate =
+        totalSignals > 0
+          ? ((totalProfitable / totalSignals) * 100).toFixed(2)
+          : '0.00';
+
       // Add overall statistics to report
-      reportContent += `Общая статистика:\n` +
+      reportContent +=
+        `Общая статистика:\n` +
         `Всего сигналов: ${totalSignals}\n` +
         `Успешных: ${totalProfitable}\n` +
         `Процент успеха: ${overallSuccessRate}%\n`;
-      
+
       // Send the report
       await this.telegramService.sendInfoNotification(
         reportHeader,
-        reportContent
+        reportContent,
+        this.channelId,
       );
-      
+
       // Cleanup old signals (keep last 30 days)
       await this.signalsService.cleanupOldSignals(30);
-      
     } catch (error) {
-      await this.telegramService.sendErrorNotification(
+      await this.telegramService.sendErrorNotification({
+        userId: this.channelId,
         error,
-        'Ошибка при формировании ежедневного отчета'
-      );
+        context: 'Ошибка при формировании ежедневного отчета',
+      });
     }
   }
 }

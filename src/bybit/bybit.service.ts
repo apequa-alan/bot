@@ -43,7 +43,7 @@ export class BybitService {
 
       // Filter out symbols with numbers and sort by volume
       const sortedCoins = response.result.list
-        .filter(coin => !/\d/.test(coin.symbol)) // Filter out symbols with numbers
+        .filter((coin) => !/\d/.test(coin.symbol)) // Filter out symbols with numbers
         .sort((a, b) => parseFloat(b.volume24h) - parseFloat(a.volume24h))
         .slice(0, topCount)
         .map((coin) => `${coin.symbol}T`);
@@ -62,20 +62,27 @@ export class BybitService {
     limit: number,
   ): Promise<{ candles: Candle[]; smoothedSMA: number | null }> {
     try {
+      const formattedSymbol = symbol.endsWith('T') ? symbol : `${symbol}T`
       const response = await this.restClient.getKline({
-        symbol,
+        symbol: formattedSymbol,
         interval,
         category: 'linear',
         limit,
       });
 
-      if (!response || !response.result?.list) {
+      if (!response) {
+        console.error(`No response from Bybit for ${formattedSymbol}`);
+        return { candles: [], smoothedSMA: null };
+      }
+
+      if (!response.result?.list) {
         console.error(
-          `Некорректный ответ от Bybit при получении свечей для ${symbol}`,
+          `Invalid response from Bybit for ${formattedSymbol}:`,
+          JSON.stringify(response, null, 2),
         );
         await this.telegramService.sendNotification(
           'error',
-          `Некорректный ответ от Bybit при получении свечей для ${formatSymbolForMarkdown(symbol)}\.`,
+          `Некорректный ответ от Bybit при получении свечей для ${formatSymbolForMarkdown(formattedSymbol)}.`,
         );
         return { candles: [], smoothedSMA: null };
       }
@@ -99,11 +106,11 @@ export class BybitService {
       );
 
       console.log(
-        `${symbol}: ${list.length} свечей (без последней незакрытой).`,
+        `${formattedSymbol}: ${list.length} свечей (без последней незакрытой).`,
       );
       return { candles: list, smoothedSMA };
     } catch (error) {
-      console.error(`Ошибка при запросе свечей для ${symbol}`, error);
+      console.error(`Ошибка при запросе свечей для ${symbol}:`, error);
       await this.telegramService.sendNotification(
         'error',
         `Ошибка при запросе свечей для ${formatSymbolForMarkdown(symbol)}: ${error}`,

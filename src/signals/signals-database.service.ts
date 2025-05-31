@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Signal } from './entities/signal.entity';
@@ -24,7 +24,7 @@ export class SignalsDatabaseService {
     await this.signalsRepository.update(
       { symbol, status: 'active' as Signal['status'] },
       {
-        status: status as Signal['status'],
+        status: status,
         exitPrice,
         profitLoss,
         exitTimestamp: Date.now(),
@@ -32,21 +32,30 @@ export class SignalsDatabaseService {
     );
   }
 
-  async getActiveSignals(): Promise<Signal[]> {
+  async getActiveSignals(userId: string): Promise<Signal[]> {
     return this.signalsRepository.find({
-      where: { status: 'active' },
+      where: { status: 'active', userId },
     });
   }
 
-  async getSignalStats(): Promise<any[]> {
+  async getSignalStats(userId: string): Promise<any[]> {
     return this.signalsRepository
       .createQueryBuilder('signal')
       .select('signal.symbol', 'symbol')
       .addSelect('COUNT(*)', 'total_signals')
-      .addSelect('SUM(CASE WHEN signal.status = :success THEN 1 ELSE 0 END)', 'profitable_signals')
-      .addSelect('SUM(CASE WHEN signal.status = :failure THEN 1 ELSE 0 END)', 'failure_signals')
+      .addSelect(
+        'SUM(CASE WHEN signal.status = :success THEN 1 ELSE 0 END)',
+        'profitable_signals',
+      )
+      .addSelect(
+        'SUM(CASE WHEN signal.status = :failure THEN 1 ELSE 0 END)',
+        'failure_signals',
+      )
       .addSelect('AVG(signal.profitLoss)', 'avg_profit_loss')
-      .where('signal.status IN (:...statuses)', { statuses: ['success', 'failure'] })
+      .where('signal.status IN (:...statuses)', {
+        statuses: ['success', 'failure'],
+      })
+      .andWhere('signal.userId = :userId', { userId })
       .setParameter('success', 'success')
       .setParameter('failure', 'failure')
       .groupBy('signal.symbol')
@@ -66,4 +75,4 @@ export class SignalsDatabaseService {
       where: { symbol, status: 'active' },
     });
   }
-} 
+}

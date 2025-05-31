@@ -8,27 +8,9 @@
  * @returns Escaped text safe for MarkdownV2
  */
 export const escapeMarkdownV2 = (text: string): string => {
-  return text.replace(/\\/g, '\\\\')
+  return text
+    .replace(/\\/g, '\\\\')
     .replace(/([_*[\]()~`>#+=|{}.!-])/g, '\\$1');
-};
-
-/**
- * Formats a number for display
- * @param num The number to format
- * @returns Formatted number string
- */
-export const formatNumberForMarkdown = (num: number): string => {
-  return num.toFixed(2);
-};
-
-/**
- * Formats a percentage for display
- * @param num The percentage to format
- * @returns Formatted percentage string
- */
-export const formatPercentageForMarkdown = (num: number): string => {
-  const sign = num >= 0 ? '+' : '';
-  return `${sign}${num.toFixed(2)}%`;
 };
 
 /**
@@ -37,7 +19,7 @@ export const formatPercentageForMarkdown = (num: number): string => {
  * @returns Formatted symbol string
  */
 export const formatSymbolForMarkdown = (symbol: string): string => {
-  return symbol;
+  return escapeMarkdownV2(symbol);
 };
 
 /**
@@ -47,7 +29,7 @@ export const formatSymbolForMarkdown = (symbol: string): string => {
  */
 export const formatSymbolsListForMarkdown = (symbols: string[]): string => {
   if (symbols.length === 0) return 'нет';
-  return symbols.join(', ');
+  return escapeMarkdownV2(symbols.join(', '));
 };
 
 /**
@@ -56,7 +38,9 @@ export const formatSymbolsListForMarkdown = (symbols: string[]): string => {
  * @returns Formatted error message
  */
 export const formatErrorForMarkdown = (error: unknown): string => {
-  return error instanceof Error ? error.message : String(error);
+  return escapeMarkdownV2(
+    error instanceof Error ? error.message : String(error),
+  );
 };
 
 /**
@@ -65,34 +49,23 @@ export const formatErrorForMarkdown = (error: unknown): string => {
  * @returns Formatted header with bold markdown
  */
 export const formatHeaderForMarkdown = (text: string): string => {
-  return `*${text}*`;
+  return `*${escapeMarkdownV2(text)}*`;
 };
 
 /**
  * Normalizes a trading interval to minutes
- * @param interval The interval to normalize (e.g. '15m', '1h', '4h', '1d')
+ * @param interval The interval in minutes (e.g. '15', '60', '1440')
  * @returns Normalized interval in minutes
- * @throws Error if interval format is invalid
+ * @throws Error if interval is not a valid number
  */
 export const normalizeInterval = (interval: string): number => {
-  const match = interval.match(/^(\d+)([mhd])$/);
-  if (!match) {
-    throw new Error('Invalid interval format. Use format like: 15m, 1h, 4h, 1d');
+  const minutes = parseInt(interval, 10);
+  if (isNaN(minutes) || minutes <= 0) {
+    throw new Error(
+      'Invalid interval format. Please provide a positive number of minutes (e.g. 15, 60, 1440)',
+    );
   }
-
-  const [, value, unit] = match;
-  const numValue = parseInt(value, 10);
-
-  switch (unit) {
-    case 'm':
-      return numValue;
-    case 'h':
-      return numValue * 60;
-    case 'd':
-      return numValue * 60 * 24;
-    default:
-      throw new Error('Invalid interval unit. Use m (minutes), h (hours), or d (days)');
-  }
+  return minutes;
 };
 
 /**
@@ -101,24 +74,29 @@ export const normalizeInterval = (interval: string): number => {
  * @returns Object containing symbol and normalized interval
  * @throws Error if message format is invalid
  */
-export const parseSubscriptionMessage = (message: string): { symbol: string; interval: string } => {
+export const parseSubscriptionMessage = (
+  message: string,
+): { symbol: string; interval: string } => {
   const parts = message.trim().split(/\s+/);
   if (parts.length !== 2) {
     throw new Error('Invalid message format. Use format like: SUIUSDT 15m');
   }
 
   const [symbol, interval] = parts;
-  
+
   // Validate symbol format (uppercase, no spaces)
   if (!/^[A-Z0-9]+$/.test(symbol)) {
-    throw new Error('Invalid symbol format. Use uppercase letters and numbers only');
+    throw new Error(
+      'Invalid symbol format. Use uppercase letters and numbers only',
+    );
   }
 
   // Validate interval format
   if (!/^\d+[mhd]$/.test(interval)) {
-    throw new Error('Invalid interval format. Use format like: 15m, 1h, 4h, 1d');
+    throw new Error(
+      'Invalid interval format. Use format like: 15m, 1h, 4h, 1d',
+    );
   }
 
   return { symbol, interval };
 };
-  
