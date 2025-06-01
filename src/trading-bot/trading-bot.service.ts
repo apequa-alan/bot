@@ -11,10 +11,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { SignalsService } from '../signals/signals.service';
 import { Signal } from '../signals/entities/signal.entity';
 import { SubscriptionsService } from './subscriptions/subscriptions.service';
-import {
-  formatHeaderForHtml,
-  formatSymbolForHtml,
-} from '../telegram/telegram.utils';
+import { formatHeaderForHtml } from '../telegram/telegram.utils';
 import {
   HIGHER_TIMEFRAME_MAP,
   SUPPORTED_INTERVALS,
@@ -104,8 +101,6 @@ export class TradingBotService implements OnModuleInit {
           this.INTERVAL,
         );
       }
-
-      console.log('Initialized top volume coins:', newTopCoins);
     } catch (error) {
       console.error('Error initializing top volume coins:', error);
       await this.telegramService.sendErrorNotification({
@@ -132,7 +127,6 @@ export class TradingBotService implements OnModuleInit {
       const subscriptions =
         await this.subscriptionsService.getAllActiveSubscriptions();
       const uniquePairs = new Set<string>();
-      console.log(subscriptions, 'subscriptions');
 
       // Get unique symbol-interval pairs
       for (const sub of subscriptions) {
@@ -196,7 +190,6 @@ export class TradingBotService implements OnModuleInit {
       const newTopCoins = await this.bybitService.getTopVolumeCoins(
         this.TOP_VOLUME_COINS_COUNT,
       );
-      console.log(newTopCoins, 'newTopCoins');
       if (newTopCoins.length === 0) {
         console.error(
           'Не удалось получить новый список монет для отслеживания',
@@ -214,19 +207,17 @@ export class TradingBotService implements OnModuleInit {
         await this.subscriptionsService.getUserSubscriptions(channelId);
       const currentSymbols = currentSubscriptions.map((sub) => sub.symbol);
 
-      // Deactivate subscriptions for symbols that are no longer in top volume
+      // Deactivate all current subscriptions first
       for (const symbol of currentSymbols) {
-        if (!newTopCoins.includes(symbol)) {
-          await this.subscriptionsService.deactivateSubscription(
-            channelId,
-            symbol,
-            this.INTERVAL,
-          );
-        }
+        await this.subscriptionsService.deactivateSubscription(
+          channelId,
+          symbol,
+          this.INTERVAL,
+        );
       }
 
-      // Create or activate subscriptions for new top volume symbols
-      for (const symbol of newTopCoins) {
+      // Create or activate subscriptions only for the top volume coins (limited by TOP_VOLUME_COINS_COUNT)
+      for (const symbol of newTopCoins.slice(0, this.TOP_VOLUME_COINS_COUNT)) {
         await this.subscriptionsService.createOrUpdateSubscription(
           channelId,
           symbol,
@@ -235,11 +226,12 @@ export class TradingBotService implements OnModuleInit {
       }
 
       // Log changes
-      const addedSymbols = newTopCoins.filter(
-        (symbol) => !currentSymbols.includes(symbol),
-      );
+      const addedSymbols = newTopCoins
+        .slice(0, this.TOP_VOLUME_COINS_COUNT)
+        .filter((symbol) => !currentSymbols.includes(symbol));
       const removedSymbols = currentSymbols.filter(
-        (symbol) => !newTopCoins.includes(symbol),
+        (symbol) =>
+          !newTopCoins.slice(0, this.TOP_VOLUME_COINS_COUNT).includes(symbol),
       );
 
       console.log('Обновлен список отслеживаемых монет:');
@@ -292,9 +284,9 @@ export class TradingBotService implements OnModuleInit {
         'update',
         async (data: { topic: string; data: WsKlineV5[] }) => {
           if (!data.topic || !data.data) return;
-
-          const symbol = data.topic.split('.')[2];
-          const symbolData = this.symbolData.get(symbol);
+          const [_, interval, symbol] = data.topic.split('.');
+          const pairKey = `${symbol}-${interval}`;
+          const symbolData = this.symbolData.get(pairKey);
           if (!symbolData) return;
 
           const klineArray = data.data;
@@ -352,6 +344,8 @@ export class TradingBotService implements OnModuleInit {
               Number(this.VOLUME_SMA_SMOOTHING_PERIOD),
             );
 
+            console.log(smoothedSMA, 'smoothedSMA');
+
             if (smoothedSMA !== null) {
               symbolData.smaVolumes.push(smoothedSMA);
             }
@@ -380,6 +374,7 @@ export class TradingBotService implements OnModuleInit {
               latestHist,
               openPositionCondition,
               histogram,
+              pairKey,
             ).catch((error) => {
               console.error(`Error handling MACD signal for ${symbol}:`, error);
             });
@@ -407,8 +402,8 @@ export class TradingBotService implements OnModuleInit {
     histogramValue: number,
     canOpenPositionByVolume: boolean,
     macdHistogram: number[],
+    pairKey: string,
   ) {
-    const pairKey = `${symbol}-${interval}`;
     const symbolData = this.symbolData.get(pairKey);
     if (!symbolData) return;
 
@@ -548,22 +543,6 @@ export class TradingBotService implements OnModuleInit {
             continue;
           }
 
-          const signalType = isLongSignal
-            ? '📈 Сигнал на открытие лонга'
-            : '📉 Сигнал на открытие шорта';
-          const formattedSymbol = formatSymbolForHtml(symbol);
-          const signalContent =
-            `${formattedSymbol}\n` +
-            `<b>${signalType}</b>\n` +
-            `Цена: ${currentClosePrice}\n` +
-            `TP: ${config.profit}%`;
-
-          const messageId = await this.telegramService.sendInfoNotification(
-            'Новый торговый сигнал',
-            signalContent,
-            userId,
-          );
-
           const signal = new Signal();
           signal.symbol = symbol;
           signal.interval = interval;
@@ -573,7 +552,6 @@ export class TradingBotService implements OnModuleInit {
           signal.active = true;
           signal.maxProfit = 0;
           signal.notified = false;
-          signal.messageId = messageId;
           signal.status = 'active';
           signal.takeProfit = currentPrice * (1 + config.profit / 100);
           signal.timestamp = Date.now();

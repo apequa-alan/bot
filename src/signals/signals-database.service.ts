@@ -1,8 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, LessThan, Repository } from 'typeorm';
 import { Signal } from './entities/signal.entity';
-import { LessThan, In } from 'typeorm';
 
 @Injectable()
 export class SignalsDatabaseService {
@@ -80,5 +79,12 @@ export class SignalsDatabaseService {
     return this.signalsRepository.findOne({
       where: { symbol, status: 'active' },
     });
+  }
+
+  async updateSignal(signal: Signal): Promise<void> {
+    await this.signalsRepository.update(
+      { id: signal.id },
+      { messageId: signal.messageId },
+    );
   }
 }

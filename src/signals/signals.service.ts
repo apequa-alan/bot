@@ -12,7 +12,7 @@ export class SignalsService {
     private readonly subscriptionsService: SubscriptionsService,
   ) {}
 
-  async createSignal(signal: Signal, userId: string): Promise<void> {
+  async createSignal(signal: Signal, userId: string): Promise<number> {
     const activeSignals = await this.getActiveSignals(userId);
     if (
       activeSignals.some(
@@ -25,32 +25,37 @@ export class SignalsService {
       console.log(
         `${signal.symbol}|${signal.interval}: Уже есть активный сигнал, новый не генерируется`,
       );
-      return;
+      return 0;
     }
 
     await this.signalsDb.saveSignal(signal);
 
-    // Notify subscribers
-    const subscribers = await this.subscriptionsService.getSubscribersForSignal(
+    // Get all subscribers for this symbol-interval pair
+    const subscribers = await this.subscriptionsService.getSubscribersForPair(
       signal.symbol,
       signal.interval,
     );
 
-    for (const subscriber of subscribers) {
+    let messageId = 0;
+    // Send notification to each subscriber
+    for (const subscriberId of subscribers) {
       try {
-        const message = this.formatSignalMessage(signal, subscriber);
-        await this.telegramService.sendDirectMessage(
-          subscriber.userId,
+        const message = this.formatSignalMessage(signal, {
+          takeProfit: signal.takeProfit,
+        });
+        messageId = await this.telegramService.sendDirectMessage(
+          subscriberId,
           message,
         );
       } catch (error) {
         console.error(
-          `Failed to notify subscriber ${subscriber.userId}:`,
+          `Failed to send signal notification to ${subscriberId}:`,
           error,
         );
         // Continue with next subscriber
       }
     }
+    return messageId;
   }
 
   private formatSignalMessage(
@@ -174,5 +179,9 @@ export class SignalsService {
         );
       }
     }
+  }
+
+  async updateSignal(signal: Signal): Promise<void> {
+    await this.signalsDb.updateSignal(signal);
   }
 }
