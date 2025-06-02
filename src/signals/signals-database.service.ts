@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, LessThan, Repository } from 'typeorm';
+import { Between, In, LessThan, Repository } from 'typeorm';
 import { Signal } from './entities/signal.entity';
+import * as dayjs from 'dayjs';
 
 @Injectable()
 export class SignalsDatabaseService {
@@ -15,19 +16,12 @@ export class SignalsDatabaseService {
   }
 
   async updateSignalStatus(
-    symbol: string,
+    signalId: string,
     status: Signal['status'],
-    exitPrice?: number,
-    profitLoss?: number,
   ): Promise<void> {
     await this.signalsRepository.update(
-      { symbol, status: 'active' as Signal['status'] },
-      {
-        status: status,
-        exitPrice,
-        profitLoss,
-        exitTimestamp: Date.now(),
-      },
+      { id: signalId, status: 'active' as Signal['status'] },
+      { status },
     );
   }
 
@@ -43,34 +37,32 @@ export class SignalsDatabaseService {
     );
   }
 
-  async getSignalStats(userId: string): Promise<any[]> {
-    return this.signalsRepository
-      .createQueryBuilder('signal')
-      .select('signal.symbol', 'symbol')
-      .addSelect('COUNT(*)', 'total_signals')
-      .addSelect(
-        'SUM(CASE WHEN signal.status = :success THEN 1 ELSE 0 END)',
-        'profitable_signals',
-      )
-      .addSelect(
-        'SUM(CASE WHEN signal.status = :failure THEN 1 ELSE 0 END)',
-        'failure_signals',
-      )
-      .addSelect('AVG(signal.profitLoss)', 'avg_profit_loss')
-      .where('signal.status IN (:...statuses)', {
-        statuses: ['success', 'failure'],
-      })
-      .andWhere('signal.userId = :userId', { userId })
-      .setParameter('success', 'success')
-      .setParameter('failure', 'failure')
-      .groupBy('signal.symbol')
-      .getRawMany();
+  async getSignalStats(userId: string) {
+    const today = dayjs().startOf('day');
+    const tomorrow = today.add(1, 'day');
+
+    const signals = await this.signalsRepository.find({
+      where: {
+        userId,
+        createdAt: Between(today.toDate(), tomorrow.toDate()),
+      },
+    });
+
+    const totalSignals = signals.length;
+    const profitableSignals = signals.filter(
+      (signal) => signal.status === 'success',
+    ).length;
+
+    return {
+      totalSignals,
+      profitableSignals,
+    };
   }
 
   async cleanupOldSignals(daysToKeep: number = 30): Promise<void> {
-    const cutoffDate = Date.now() - daysToKeep * 24 * 60 * 60 * 1000;
+    const cutoffDate = dayjs().subtract(daysToKeep, 'day').toDate();
     await this.signalsRepository.delete({
-      timestamp: LessThan(cutoffDate),
+      createdAt: LessThan(cutoffDate),
       status: In(['success', 'failure']),
     });
   }

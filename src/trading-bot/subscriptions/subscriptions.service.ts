@@ -65,13 +65,6 @@ export class SubscriptionsService {
     return updated;
   }
 
-  async getSubscribersForSignal(
-    symbol: string,
-    interval: string,
-  ): Promise<Subscription[]> {
-    return this.repository.findActiveBySymbolAndInterval(symbol, interval);
-  }
-
   async getUserSubscriptions(userId: string): Promise<Subscription[]> {
     return this.repository.find({
       userId,
@@ -110,15 +103,16 @@ export class SubscriptionsService {
     await this.tradingBotService.handleSubscriptionChange();
   }
 
-  async getSubscribersForPair(
+  async getSubscribersIdsForPair(
     symbol: string,
     interval: string,
   ): Promise<string[]> {
     const subscriptions = await this.repository.find({
       symbol,
-      interval,
+      interval: `${interval}m`,
       active: true,
     });
+    console.log(symbol, interval, subscriptions);
 
     return subscriptions.map((sub) => sub.userId);
   }

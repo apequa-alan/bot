@@ -2,17 +2,19 @@ import { Injectable } from '@nestjs/common';
 import { SignalsDatabaseService } from './signals-database.service';
 import { Signal } from './entities/signal.entity';
 import { TelegramService } from '../telegram/telegram.service';
-import { SubscriptionsService } from '../trading-bot/subscriptions/subscriptions.service';
+import { ConfigService } from '@nestjs/config';
+import { SUPPORTED_INTERVALS } from 'src/trading-bot/utils/interval.utils';
+import dayjs from 'dayjs';
 
 @Injectable()
 export class SignalsService {
   constructor(
     private readonly signalsDb: SignalsDatabaseService,
     private readonly telegramService: TelegramService,
-    private readonly subscriptionsService: SubscriptionsService,
+    private readonly configService: ConfigService,
   ) {}
 
-  async createSignal(signal: Signal, userId: string): Promise<number> {
+  async createSignal(signal: Signal, userId: string) {
     const activeSignals = await this.getActiveSignals(userId);
     if (
       activeSignals.some(
@@ -28,77 +30,45 @@ export class SignalsService {
       return 0;
     }
 
-    await this.signalsDb.saveSignal(signal);
-
-    // Get all subscribers for this symbol-interval pair
-    const subscribers = await this.subscriptionsService.getSubscribersForPair(
-      signal.symbol,
-      signal.interval,
+    const message = this.formatSignalMessage(signal);
+    const messageId = await this.telegramService.sendDirectMessage(
+      userId,
+      message,
     );
-
-    let messageId = 0;
-    // Send notification to each subscriber
-    for (const subscriberId of subscribers) {
-      try {
-        const message = this.formatSignalMessage(signal, {
-          takeProfit: signal.takeProfit,
-        });
-        messageId = await this.telegramService.sendDirectMessage(
-          subscriberId,
-          message,
-        );
-      } catch (error) {
-        console.error(
-          `Failed to send signal notification to ${subscriberId}:`,
-          error,
-        );
-        // Continue with next subscriber
-      }
-    }
-    return messageId;
+    signal.messageId = messageId;
+    await this.signalsDb.saveSignal(signal);
   }
 
-  private formatSignalMessage(
-    signal: Signal,
-    subscription: { takeProfit: number | null },
-  ): string {
-    const baseMessage =
-      `🔔 Новый сигнал!\n\n` +
-      `Символ: ${signal.symbol}\n` +
-      `Интервал: ${signal.interval}\n` +
-      `Тип: ${signal.type === 'long' ? '🟢 Long' : '🔴 Short'}\n` +
-      `Цена входа: ${signal.entryPrice}\n`;
-
-    if (subscription.takeProfit) {
-      return baseMessage + `Take Profit: ${subscription.takeProfit}%`;
+  private formatSignalMessage(signal: Signal): string {
+    const channelId = this.configService.get<string>('TELEGRAM_CHANNEL_ID', '');
+    let baseMessage =
+      `🔵 *Новый торговый сигнал*\n` +
+      `<b>${signal.symbol}</b> ${signal.type === 'long' ? '📈 Сигнал на открытие лонга' : '📉 Сигнал на открытие шорта'} \n`;
+    if (channelId !== signal.userId) {
+      baseMessage += `Интервал: <b>${signal.interval}m</b>\n`;
     }
+    baseMessage +=
+      `Цена: ${signal.entryPrice} \n` +
+      `TP: ${SUPPORTED_INTERVALS[`${signal.interval}m`].profit}%`;
 
     return baseMessage;
   }
 
   async updateSignalStatus(
-    symbol: string,
+    signal: Signal,
     status: Signal['status'],
     currentPrice: number,
-    profitLoss: number,
+    profitPercent: number,
   ): Promise<void> {
-    const signal = await this.signalsDb.getSignalBySymbol(symbol);
-    if (!signal) return;
-
-    await this.signalsDb.updateSignalStatus(
-      symbol,
-      status,
-      currentPrice,
-      profitLoss,
-    );
+    await this.signalsDb.updateSignalStatus(signal.id, status);
 
     if (status === 'success') {
       await this.telegramService.sendReplyNotification(
         'fix',
-        `${symbol} 💰 Прибыль по сигналу! \n` +
+        `${signal.symbol} 💰 Прибыль по сигналу! \n` +
           `Тип: ${signal.type}\n` +
           `Текущая цена: ${currentPrice}\n` +
-          `Доходность: ${profitLoss.toFixed(2)}%`,
+          `Доходность: ${profitPercent}%`,
         signal.messageId,
         signal.userId,
       );
@@ -109,7 +79,7 @@ export class SignalsService {
     return this.signalsDb.getActiveSignals(userId);
   }
 
-  async getSignalStats(userId: string): Promise<any[]> {
+  async getSignalStats(userId: string) {
     return this.signalsDb.getSignalStats(userId);
   }
 
@@ -130,11 +100,7 @@ export class SignalsService {
     lowPrice: number;
     profitConfig: { profit: number; validityHours: number };
   }): Promise<void> {
-    const activeSignals = await this.getActiveSignals(symbol);
-    const symbolSignals = activeSignals.filter(
-      (signal) => signal.symbol === symbol && signal.status === 'active',
-    );
-
+    const symbolSignals = await this.getActiveSignals(symbol);
     if (!symbolSignals.length) return;
 
     for (const signal of symbolSignals) {
@@ -152,30 +118,23 @@ export class SignalsService {
         maxPossibleProfitPercent =
           ((signal.entryPrice - lowPrice) / signal.entryPrice) * 100;
       }
-
-      if (maxPossibleProfitPercent > signal.maxProfit) {
-        signal.maxProfit = maxPossibleProfitPercent;
-      }
-
-      // Check if signal has expired based on validity hours
-      const signalAge = (Date.now() - signal.timestamp) / (1000 * 60 * 60); // Convert to hours
-      const isExpired = signalAge >= signal.validityHours;
-
-      if (isExpired && !signal.notified) {
-        signal.notified = true;
+      console.log(symbol, maxPossibleProfitPercent, 'maxPossibleProfitPercent');
+      const isExpired = dayjs(signal.createdAt)
+        .add(profitConfig.validityHours, 'h')
+        .isBefore(dayjs(new Date()));
+      if (maxPossibleProfitPercent >= profitConfig.profit) {
         await this.updateSignalStatus(
-          symbol,
-          'failure',
-          currentPrice,
-          profitPercent,
-        );
-      } else if (signal.maxProfit >= profitConfig.profit && !signal.notified) {
-        signal.notified = true;
-        await this.updateSignalStatus(
-          symbol,
+          signal,
           'success',
           currentPrice,
-          signal.maxProfit,
+          maxPossibleProfitPercent,
+        );
+      } else if (isExpired) {
+        await this.updateSignalStatus(
+          signal,
+          'failure',
+          currentPrice,
+          maxPossibleProfitPercent,
         );
       }
     }

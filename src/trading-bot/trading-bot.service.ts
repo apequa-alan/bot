@@ -11,7 +11,6 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { SignalsService } from '../signals/signals.service';
 import { Signal } from '../signals/entities/signal.entity';
 import { SubscriptionsService } from './subscriptions/subscriptions.service';
-import { formatHeaderForHtml } from '../telegram/telegram.utils';
 import {
   HIGHER_TIMEFRAME_MAP,
   SUPPORTED_INTERVALS,
@@ -134,46 +133,50 @@ export class TradingBotService implements OnModuleInit {
         uniquePairs.add(`${sub.symbol}-${validInterval}`);
       }
 
+      // Find pairs to unsubscribe and subscribe
+      const pairsToUnsubscribe = Array.from(this.activeSubscriptions).filter(
+        (pair) => !uniquePairs.has(pair),
+      );
+      const pairsToSubscribe = Array.from(uniquePairs).filter(
+        (pair) => !this.activeSubscriptions.has(pair),
+      );
+
       // Unsubscribe from pairs that are no longer needed
-      for (const pair of this.activeSubscriptions) {
-        if (!uniquePairs.has(pair)) {
-          const [symbol, interval] = pair.split('-');
-          const wsKlineTopicEvent = `kline.${interval}.${symbol}`;
-          this.ws.unsubscribeV5(wsKlineTopicEvent, 'linear');
-          this.activeSubscriptions.delete(pair);
-          this.symbolData.delete(pair);
-          console.log(`Unsubscribed from ${symbol} ${interval}`);
-        }
+      for (const pair of pairsToUnsubscribe) {
+        const [symbol, interval] = pair.split('-');
+        const wsKlineTopicEvent = `kline.${interval}.${symbol}`;
+        this.ws.unsubscribeV5(wsKlineTopicEvent, 'linear');
+        this.activeSubscriptions.delete(pair);
+        this.symbolData.delete(pair);
+        console.log(`Unsubscribed from ${symbol} ${interval}`);
       }
 
       // Subscribe to new pairs
-      for (const pair of uniquePairs) {
-        if (!this.activeSubscriptions.has(pair)) {
-          const [symbol, interval] = pair.split('-');
-          const validInterval = this.validateInterval(`${interval}m`);
+      for (const pair of pairsToSubscribe) {
+        const [symbol, interval] = pair.split('-');
+        const validInterval = this.validateInterval(`${interval}m`);
 
-          // Fetch candles before subscribing
-          const { candles, smoothedSMA } =
-            await this.bybitService.fetchCandlesWithoutLast(
-              symbol,
-              validInterval,
-              limit,
-            );
-
-          this.symbolData.set(pair, {
+        // Fetch candles before subscribing
+        const { candles, smoothedSMA } =
+          await this.bybitService.fetchCandlesWithoutLast(
             symbol,
-            interval: validInterval,
-            candles,
-            smaVolumes: smoothedSMA !== null ? [smoothedSMA] : [],
-            prevHistogramAbs: 0,
-          });
+            validInterval,
+            limit,
+          );
 
-          // Subscribe to WebSocket after data is initialized
-          const wsKlineTopicEvent = `kline.${validInterval}.${symbol}`;
-          this.ws.subscribeV5(wsKlineTopicEvent, 'linear');
-          this.activeSubscriptions.add(pair);
-          console.log(`Subscribed to ${symbol} ${validInterval}`);
-        }
+        this.symbolData.set(pair, {
+          symbol,
+          interval: validInterval,
+          candles,
+          smaVolumes: smoothedSMA !== null ? [smoothedSMA] : [],
+          prevHistogramAbs: 0,
+        });
+
+        // Subscribe to WebSocket after data is initialized
+        const wsKlineTopicEvent = `kline.${validInterval}.${symbol}`;
+        this.ws.subscribeV5(wsKlineTopicEvent, 'linear');
+        this.activeSubscriptions.add(pair);
+        console.log(`Subscribed to ${symbol} ${validInterval}`);
       }
     } catch (error) {
       console.error('Error updating subscriptions:', error);
@@ -208,11 +211,11 @@ export class TradingBotService implements OnModuleInit {
       const currentSymbols = currentSubscriptions.map((sub) => sub.symbol);
 
       // Deactivate all current subscriptions first
-      for (const symbol of currentSymbols) {
+      for (const subscription of currentSubscriptions) {
         await this.subscriptionsService.deactivateSubscription(
           channelId,
-          symbol,
-          this.INTERVAL,
+          subscription.symbol,
+          subscription.interval,
         );
       }
 
@@ -235,8 +238,14 @@ export class TradingBotService implements OnModuleInit {
       );
 
       console.log('Обновлен список отслеживаемых монет:');
-      console.log('Добавлены:', addedSymbols);
-      console.log('Удалены:', removedSymbols);
+      console.log(
+        'Добавлены:',
+        addedSymbols.map((symbol) => `${symbol} ${this.INTERVAL}`),
+      );
+      console.log(
+        'Удалены:',
+        removedSymbols.map((symbol) => `${symbol} ${this.INTERVAL}`),
+      );
     } catch (error) {
       console.error('Ошибка при обновлении списка монет:', error);
       await this.telegramService.sendErrorNotification({
@@ -301,7 +310,7 @@ export class TradingBotService implements OnModuleInit {
 
           const startTime = dayjs(latestKline.start).format('YY-MM-DD HH:mm');
           console.log(
-            `${symbol}: Новая закрытая свеча: ${startTime}, close=${close}, high=${high}, low=${low}`,
+            `${symbol} ${interval}: Новая закрытая свеча: ${startTime}, close=${close}, high=${high}, low=${low}`,
           );
 
           // Check for profit on active signals using high and low prices
@@ -310,7 +319,7 @@ export class TradingBotService implements OnModuleInit {
             currentPrice: close,
             highPrice: high,
             lowPrice: low,
-            profitConfig: this.getProfitConfig(),
+            profitConfig: this.getProfitConfig(interval),
           });
 
           symbolData.candles.push({
@@ -336,15 +345,13 @@ export class TradingBotService implements OnModuleInit {
           if (histogram.length) {
             const latestHist = histogram[histogram.length - 1];
             console.log(
-              `${symbol}: [ws update] MACD hist=${latestHist.toFixed(6)}, closePrice=${symbolData.candles[histogram.length - 1].closePrice}, closeTime=${symbolData.candles[histogram.length - 1].startTime}, (fast=${macdLine[macdLine.length - 1].toFixed(6)}, signal=${signalLine[signalLine.length - 1].toFixed(6)})`,
+              `${symbol} ${interval}: [ws update] MACD hist=${latestHist.toFixed(6)}, closePrice=${symbolData.candles[histogram.length - 1].closePrice}, closeTime=${symbolData.candles[histogram.length - 1].startTime}, (fast=${macdLine[macdLine.length - 1].toFixed(6)}, signal=${signalLine[signalLine.length - 1].toFixed(6)})`,
             );
 
             const smoothedSMA = calculateSmoothedSMA(
               symbolData.candles.map(({ volume }) => parseFloat(volume)),
               Number(this.VOLUME_SMA_SMOOTHING_PERIOD),
             );
-
-            console.log(smoothedSMA, 'smoothedSMA');
 
             if (smoothedSMA !== null) {
               symbolData.smaVolumes.push(smoothedSMA);
@@ -370,13 +377,16 @@ export class TradingBotService implements OnModuleInit {
 
             this.handleMacdSignal(
               symbol,
-              this.INTERVAL,
+              interval,
               latestHist,
               openPositionCondition,
               histogram,
               pairKey,
             ).catch((error) => {
-              console.error(`Error handling MACD signal for ${symbol}:`, error);
+              console.error(
+                `Error handling MACD signal for ${symbol} ${interval}:`,
+                error,
+              );
             });
           }
         },
@@ -411,12 +421,12 @@ export class TradingBotService implements OnModuleInit {
     const currentSign = Math.sign(histogramValue);
 
     console.log(
-      `${symbol}: [handleMacdSignal] Current histogram value: ${histogramValue.toFixed(6)}, sign: ${currentSign}`,
+      `${symbol} ${interval}: [handleMacdSignal] Current histogram value: ${histogramValue.toFixed(6)}, sign: ${currentSign}`,
     );
 
     if (macdHistogram.length < this.ONE_HISTOGRAM_DIRECTION_CANDLES) {
       console.log(
-        `${symbol}: [handleMacdSignal] Недостаточно свечей для проверки MACD направления. Требуется минимум ${this.ONE_HISTOGRAM_DIRECTION_CANDLES} свечей.`,
+        `${symbol} ${interval}: [handleMacdSignal] Недостаточно свечей для проверки MACD направления. Требуется минимум ${this.ONE_HISTOGRAM_DIRECTION_CANDLES} свечей.`,
       );
       return;
     }
@@ -427,12 +437,12 @@ export class TradingBotService implements OnModuleInit {
       (value) => Math.sign(value) === currentSign,
     );
     console.log(
-      `${symbol}: [handleMacdSignal] Last ${this.ONE_HISTOGRAM_DIRECTION_CANDLES} candles signs:`,
+      `${symbol} ${interval}: [handleMacdSignal] Last ${this.ONE_HISTOGRAM_DIRECTION_CANDLES} candles signs:`,
       lastCandles.map((v) => Math.sign(v)),
     );
     if (!allSame) {
       console.log(
-        `${symbol}: [handleMacdSignal] Последние ${this.ONE_HISTOGRAM_DIRECTION_CANDLES} свечей не подтверждают единое направление MACD.`,
+        `${symbol} ${interval}: [handleMacdSignal] Последние ${this.ONE_HISTOGRAM_DIRECTION_CANDLES} свечей не подтверждают единое направление MACD.`,
       );
       return;
     }
@@ -440,17 +450,17 @@ export class TradingBotService implements OnModuleInit {
     // Проверяем ослабление сигнала: если абсолютное значение MACD не снизилось
     if (currentHistogramAbs >= symbolData.prevHistogramAbs) {
       console.log(
-        `${symbol}: [handleMacdSignal] Абсолютное значение MACD не снизилось. Current: ${currentHistogramAbs.toFixed(6)}, Previous: ${symbolData.prevHistogramAbs.toFixed(6)}`,
+        `${symbol} ${interval}: [handleMacdSignal] Абсолютное значение MACD не снизилось. Current: ${currentHistogramAbs.toFixed(6)}, Previous: ${symbolData.prevHistogramAbs.toFixed(6)}`,
       );
       symbolData.prevHistogramAbs = currentHistogramAbs;
       return;
     }
 
     if (canOpenPositionByVolume) {
-      const higherInterval = HIGHER_TIMEFRAME_MAP[this.INTERVAL];
+      const higherInterval = HIGHER_TIMEFRAME_MAP[`${interval}m`];
       if (!higherInterval) {
         console.log(
-          `${symbol}: No higher timeframe mapping available for interval ${this.INTERVAL}`,
+          `${symbol} ${interval}: No higher timeframe mapping available for interval ${interval}`,
         );
         return;
       }
@@ -463,7 +473,9 @@ export class TradingBotService implements OnModuleInit {
         );
 
       if (!higherTimeframeCandles || higherTimeframeCandles.length === 0) {
-        console.log(`${symbol}: No higher timeframe data available`);
+        console.log(
+          `${symbol} ${interval}: No higher timeframe data available`,
+        );
         return;
       }
 
@@ -475,7 +487,9 @@ export class TradingBotService implements OnModuleInit {
       );
 
       if (higherTimeframeMACD.histogram.length === 0) {
-        console.log(`${symbol}: No MACD data available for higher timeframe`);
+        console.log(
+          `${symbol} ${interval}: No MACD data available for higher timeframe`,
+        );
         return;
       }
 
@@ -487,7 +501,7 @@ export class TradingBotService implements OnModuleInit {
         Math.abs(higherTimeframeHistogram) <
         Math.abs(higherTimeframePrevHistogram);
 
-      console.log(`${symbol}: [handleMacdSignal] Higher timeframe analysis:
+      console.log(`${symbol} ${interval}: [handleMacdSignal] Higher timeframe analysis:
         Current histogram: ${higherTimeframeHistogram.toFixed(6)}
         Previous histogram: ${higherTimeframePrevHistogram.toFixed(6)}
         Started to down: ${higherTimeframeAbsStartedToDown}
@@ -504,7 +518,7 @@ export class TradingBotService implements OnModuleInit {
         (higherTimeframeHistogram > 0 ||
           (higherTimeframeHistogram < 0 && higherTimeframeAbsStartedToDown));
 
-      console.log(`${symbol}: [handleMacdSignal] Signal conditions:
+      console.log(`${symbol} ${interval}: [handleMacdSignal] Signal conditions:
         Is short signal: ${isShortSignal}
         Is long signal: ${isLongSignal}
         Can open position by volume: ${canOpenPositionByVolume}`);
@@ -516,66 +530,44 @@ export class TradingBotService implements OnModuleInit {
         const currentPrice = parseFloat(currentClosePrice);
         const currentTime =
           symbolData.candles[symbolData.candles.length - 1].startTime;
-        const config = this.getProfitConfig();
+        const config = this.getProfitConfig(interval);
 
         // Get all users subscribed to this symbol-interval pair
-        const subscribers =
-          await this.subscriptionsService.getSubscribersForPair(
+        const subscriberIds =
+          await this.subscriptionsService.getSubscribersIdsForPair(
             symbol,
             interval,
           );
 
+        console.log(subscriberIds, 'subscriberIds');
+
         // Create and send signal for each subscriber
-        for (const userId of subscribers) {
-          const activeSignals =
-            await this.signalsService.getActiveSignals(userId);
-          const hasActiveSignal = activeSignals.some(
-            (signal) =>
-              signal.symbol === symbol &&
-              signal.interval === interval &&
-              signal.status === 'active',
-          );
-
-          if (hasActiveSignal) {
-            console.log(
-              `${symbol}: Active signal already exists for user ${userId}`,
-            );
-            continue;
-          }
-
+        for (const userId of subscriberIds) {
           const signal = new Signal();
           signal.symbol = symbol;
           signal.interval = interval;
           signal.entryPrice = currentPrice;
-          signal.entryTime = currentTime;
           signal.type = isLongSignal ? 'long' : 'short';
-          signal.active = true;
-          signal.maxProfit = 0;
-          signal.notified = false;
           signal.status = 'active';
           signal.takeProfit = currentPrice * (1 + config.profit / 100);
-          signal.timestamp = Date.now();
-          signal.exitPrice = null;
-          signal.exitTimestamp = null;
-          signal.profitLoss = null;
-          signal.validityHours = config.validityHours;
           signal.userId = userId;
 
           await this.signalsService.createSignal(signal, userId);
         }
       } else {
         console.log(
-          `${symbol}: [handleMacdSignal] Нет сигнала для открытия позиции. MACD малого таймфрейма: ${currentSign}, MACD большого таймфрейма: ${higherTimeframeHistogram.toFixed(6)}`,
+          `${symbol} ${interval}: [handleMacdSignal] Нет сигнала для открытия позиции. MACD малого таймфрейма: ${currentSign}, MACD большого таймфрейма: ${higherTimeframeHistogram.toFixed(6)}`,
         );
       }
     }
   }
 
   // Get profit/validity config for current timeframe
-  private getProfitConfig(): { profit: number; validityHours: number } {
-    return (
-      SUPPORTED_INTERVALS[this.INTERVAL] || { profit: 1, validityHours: 24 }
-    );
+  private getProfitConfig(interval: string): {
+    profit: number;
+    validityHours: number;
+  } {
+    return SUPPORTED_INTERVALS[interval] || { profit: 1, validityHours: 24 };
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
@@ -585,32 +577,20 @@ export class TradingBotService implements OnModuleInit {
       const stats = await this.signalsService.getSignalStats(this.channelId);
 
       // Format the daily report
-      const reportHeader = formatHeaderForHtml(
-        '📊 Ежедневный отчет по сигналам',
-      );
+      const reportHeader = '<b>📊 Ежедневный отчет по сигналам</b>';
       let reportContent = '';
 
-      // Calculate overall statistics
-      let totalSignals = 0;
-      let totalProfitable = 0;
-
-      for (const stat of stats) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        totalSignals += Number(stat?.total_signals ?? 0);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        totalProfitable += Number(stat?.profitable_signals ?? 0);
-      }
-
+      const { totalSignals, profitableSignals } = stats;
       const overallSuccessRate =
         totalSignals > 0
-          ? ((totalProfitable / totalSignals) * 100).toFixed(2)
+          ? ((profitableSignals / totalSignals) * 100).toFixed(2)
           : '0.00';
 
       // Add overall statistics to report
       reportContent +=
         `Общая статистика:\n` +
         `Всего сигналов: ${totalSignals}\n` +
-        `Успешных: ${totalProfitable}\n` +
+        `Успешных: ${profitableSignals}\n` +
         `Процент успеха: ${overallSuccessRate}%\n`;
 
       // Send the report

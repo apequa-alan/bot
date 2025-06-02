@@ -1,11 +1,3 @@
-export function formatSymbolForHtml(symbol: string): string {
-  return `<b>${symbol}</b>`;
-}
-
-export function formatHeaderForHtml(header: string): string {
-  return `<b>${header}</b>`;
-}
-
 export function formatErrorForHtml(error: unknown): string {
   const errorMessage = error instanceof Error ? error.message : String(error);
   return `<code>${errorMessage}</code>`;

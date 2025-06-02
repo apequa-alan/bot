@@ -1,24 +1,19 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectBot } from 'nestjs-telegraf';
-import { Telegraf, Context } from 'telegraf';
-import {
-  formatErrorForHtml,
-  formatHeaderForHtml,
-  parseSubscriptionMessage,
-} from './telegram.utils';
+import { Context, Markup, Telegraf } from 'telegraf';
+import { formatErrorForHtml, parseSubscriptionMessage } from './telegram.utils';
 import { SubscriptionsService } from '../trading-bot/subscriptions/subscriptions.service';
 import {
-  validateAndNormalizeInterval,
   SUPPORTED_INTERVALS,
+  validateAndNormalizeInterval,
 } from '../trading-bot/utils/interval.utils';
-import { Markup } from 'telegraf';
 
 @Injectable()
 export class TelegramService implements OnModuleInit {
   private readonly channelId: string;
   private readonly mainKeyboard = Markup.keyboard([
-    ['📘 Команды', '📋 Подписки'],
+    ['📘 Команды', '📋 Подписки', '❌ Подписки'],
   ]).resize();
 
   constructor(
@@ -80,6 +75,10 @@ export class TelegramService implements OnModuleInit {
 
     this.bot.action('refresh_subscriptions', async (ctx) => {
       await this.handleRefreshSubscriptionsCallback(ctx);
+    });
+
+    this.bot.action('clear_all_subscriptions', async (ctx) => {
+      await this.handleClearAllCommand(ctx);
     });
   }
 
@@ -269,6 +268,12 @@ export class TelegramService implements OnModuleInit {
           reply_markup: {
             inline_keyboard: [
               [{ text: '🔄 Обновить', callback_data: 'refresh_subscriptions' }],
+              [
+                {
+                  text: '❌ Отключить все',
+                  callback_data: 'clear_all_subscriptions',
+                },
+              ],
             ],
           },
         },
@@ -524,7 +529,7 @@ export class TelegramService implements OnModuleInit {
   }): Promise<number> {
     const errorMessage = formatErrorForHtml(error);
     const message = context
-      ? `${formatHeaderForHtml(context)}\n${errorMessage}`
+      ? `<b>${context}</b>\n${errorMessage}`
       : errorMessage;
     return this.sendNotification('error', message, userId);
   }
@@ -534,7 +539,7 @@ export class TelegramService implements OnModuleInit {
     content: string,
     userId: string,
   ): Promise<number> {
-    const message = `${formatHeaderForHtml(title)}\n\n${content}`;
+    const message = `<b>${title}</b>\n\n${content}`;
     const response = await this.bot.telegram.sendMessage(userId, message, {
       parse_mode: 'HTML',
     });
