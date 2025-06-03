@@ -1,7 +1,7 @@
 import { forwardRef, Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as dayjs from 'dayjs';
 import { KlineIntervalV3, WebsocketClient } from 'bybit-api';
+
 import { TelegramService } from '../telegram/telegram.service';
 import { BybitService } from '../bybit/bybit.service';
 import { calculateMACD } from './utils/macd.utils';
@@ -15,6 +15,7 @@ import {
   HIGHER_TIMEFRAME_MAP,
   SUPPORTED_INTERVALS,
 } from './utils/interval.utils';
+import dayjs from '../utils/dayjs';
 
 const limit = 300;
 
@@ -528,8 +529,6 @@ export class TradingBotService implements OnModuleInit {
 
       if (isLongSignal || isShortSignal) {
         const currentPrice = parseFloat(currentClosePrice);
-        const currentTime =
-          symbolData.candles[symbolData.candles.length - 1].startTime;
         const config = this.getProfitConfig(interval);
 
         // Get all users subscribed to this symbol-interval pair

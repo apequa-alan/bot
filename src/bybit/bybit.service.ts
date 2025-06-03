@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { GetTickersParamsV5, KlineIntervalV3, RestClientV5 } from 'bybit-api';
 import { TelegramService } from '../telegram/telegram.service';
 import { calculateSmoothedSMA } from '../trading-bot/utils/sma.utils';
-import * as dayjs from 'dayjs';
+import { dayjs } from '../utils';
 import { Candle } from '../trading-bot/types';
 
 @Injectable()

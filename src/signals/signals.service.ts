@@ -4,7 +4,7 @@ import { Signal } from './entities/signal.entity';
 import { TelegramService } from '../telegram/telegram.service';
 import { ConfigService } from '@nestjs/config';
 import { SUPPORTED_INTERVALS } from 'src/trading-bot/utils/interval.utils';
-import dayjs from 'dayjs';
+import { dayjs } from '../utils';
 
 @Injectable()
 export class SignalsService {
@@ -104,24 +104,18 @@ export class SignalsService {
     if (!symbolSignals.length) return;
 
     for (const signal of symbolSignals) {
-      let profitPercent = 0;
       let maxPossibleProfitPercent = 0;
 
       if (signal.type === 'long') {
-        profitPercent =
-          ((currentPrice - signal.entryPrice) / signal.entryPrice) * 100;
         maxPossibleProfitPercent =
           ((highPrice - signal.entryPrice) / signal.entryPrice) * 100;
       } else if (signal.type === 'short') {
-        profitPercent =
-          ((signal.entryPrice - currentPrice) / signal.entryPrice) * 100;
         maxPossibleProfitPercent =
           ((signal.entryPrice - lowPrice) / signal.entryPrice) * 100;
       }
-      console.log(symbol, maxPossibleProfitPercent, 'maxPossibleProfitPercent');
       const isExpired = dayjs(signal.createdAt)
-        .add(profitConfig.validityHours, 'h')
-        .isBefore(dayjs(new Date()));
+        .add(profitConfig.validityHours, 'hours')
+        .isSameOrBefore(dayjs());
       if (maxPossibleProfitPercent >= profitConfig.profit) {
         await this.updateSignalStatus(
           signal,

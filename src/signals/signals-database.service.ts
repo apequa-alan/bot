@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+
+import { dayjs } from '../utils';
+
 import { Between, In, LessThan, Repository } from 'typeorm';
 import { Signal } from './entities/signal.entity';
-import * as dayjs from 'dayjs';
 
 @Injectable()
 export class SignalsDatabaseService {
