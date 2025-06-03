@@ -13,7 +13,7 @@ import {
 export class TelegramService implements OnModuleInit {
   private readonly channelId: string;
   private readonly mainKeyboard = Markup.keyboard([
-    ['📘 Команды', '📋 Подписки', '❌ Подписки'],
+    ['📘 Команды', '📋 Подписки'],
   ]).resize();
 
   constructor(
@@ -46,10 +46,6 @@ export class TelegramService implements OnModuleInit {
 
     this.bot.hears('📋 Подписки', async (ctx) => {
       await this.handleSubscriptionsCommand(ctx);
-    });
-
-    this.bot.hears('❌ Подписки', async (ctx) => {
-      await this.handleClearAllCommand(ctx);
     });
 
     this.bot.action('show_help', async (ctx) => {

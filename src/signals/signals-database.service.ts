@@ -27,6 +27,12 @@ export class SignalsDatabaseService {
     );
   }
 
+  async getActiveSignalsBySymbol(symbol: string): Promise<Signal[]> {
+    return this.signalsRepository.find({
+      where: { symbol, status: 'active' },
+    });
+  }
+
   async getActiveSignals(userId?: string): Promise<Signal[]> {
     return this.signalsRepository.find(
       userId

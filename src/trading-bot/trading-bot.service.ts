@@ -320,7 +320,7 @@ export class TradingBotService implements OnModuleInit {
             currentPrice: close,
             highPrice: high,
             lowPrice: low,
-            profitConfig: this.getProfitConfig(interval),
+            profitConfig: this.getProfitConfig(`${interval}m`),
           });
 
           symbolData.candles.push({
@@ -529,7 +529,7 @@ export class TradingBotService implements OnModuleInit {
 
       if (isLongSignal || isShortSignal) {
         const currentPrice = parseFloat(currentClosePrice);
-        const config = this.getProfitConfig(interval);
+        const config = this.getProfitConfig(`${interval}m`);
 
         // Get all users subscribed to this symbol-interval pair
         const subscriberIds =

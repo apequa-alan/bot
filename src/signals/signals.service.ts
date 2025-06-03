@@ -68,7 +68,7 @@ export class SignalsService {
         `${signal.symbol} 💰 Прибыль по сигналу! \n` +
           `Тип: ${signal.type}\n` +
           `Текущая цена: ${currentPrice}\n` +
-          `Доходность: ${profitPercent}%`,
+          `Доходность: ${profitPercent.toFixed(3)}%`,
         signal.messageId,
         signal.userId,
       );
@@ -77,6 +77,10 @@ export class SignalsService {
 
   async getActiveSignals(userId?: string): Promise<Signal[]> {
     return this.signalsDb.getActiveSignals(userId);
+  }
+
+  async getActiveSignalsBySymbol(symbol: string): Promise<Signal[]> {
+    return this.signalsDb.getActiveSignalsBySymbol(symbol);
   }
 
   async getSignalStats(userId: string) {
@@ -100,7 +104,8 @@ export class SignalsService {
     lowPrice: number;
     profitConfig: { profit: number; validityHours: number };
   }): Promise<void> {
-    const symbolSignals = await this.getActiveSignals(symbol);
+    const symbolSignals = await this.getActiveSignalsBySymbol(symbol);
+
     if (!symbolSignals.length) return;
 
     for (const signal of symbolSignals) {
@@ -114,7 +119,7 @@ export class SignalsService {
           ((signal.entryPrice - lowPrice) / signal.entryPrice) * 100;
       }
       const isExpired = dayjs(signal.createdAt)
-        .add(profitConfig.validityHours, 'hours')
+        .add(profitConfig.validityHours, 'h')
         .isSameOrBefore(dayjs());
       if (maxPossibleProfitPercent >= profitConfig.profit) {
         await this.updateSignalStatus(
@@ -132,9 +137,5 @@ export class SignalsService {
         );
       }
     }
-  }
-
-  async updateSignal(signal: Signal): Promise<void> {
-    await this.signalsDb.updateSignal(signal);
   }
 }
