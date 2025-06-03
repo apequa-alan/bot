@@ -27,8 +27,8 @@ export class InitMigration1748931714354 implements MigrationInterface {
                                  "takeProfit" double precision  NOT NULL,
                                  "status"     character varying NOT NULL,
                                  "messageId"  integer           NOT NULL,
-                                 "createdAt"  TIMESTAMP         NOT NULL DEFAULT now(),
-                                 "updatedAt"  TIMESTAMP         NOT NULL DEFAULT now(),
+                                 "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                                 "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
                                  CONSTRAINT "PK_04eeac09c09b65bc55c628c101d" PRIMARY KEY ("id")
                              )`);
   }

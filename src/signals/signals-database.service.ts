@@ -74,17 +74,4 @@ export class SignalsDatabaseService {
       status: In(['success', 'failure']),
     });
   }
-
-  async getSignalBySymbol(symbol: string): Promise<Signal | null> {
-    return this.signalsRepository.findOne({
-      where: { symbol, status: 'active' },
-    });
-  }
-
-  async updateSignal(signal: Signal): Promise<void> {
-    await this.signalsRepository.update(
-      { id: signal.id },
-      { messageId: signal.messageId },
-    );
-  }
 }

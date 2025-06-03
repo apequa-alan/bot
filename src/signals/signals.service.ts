@@ -108,6 +108,8 @@ export class SignalsService {
 
     if (!symbolSignals.length) return;
 
+    const now = dayjs().utc(); // Use UTC for current time
+
     for (const signal of symbolSignals) {
       let maxPossibleProfitPercent = 0;
 
@@ -118,9 +120,24 @@ export class SignalsService {
         maxPossibleProfitPercent =
           ((signal.entryPrice - lowPrice) / signal.entryPrice) * 100;
       }
-      const isExpired = dayjs(signal.createdAt)
-        .add(profitConfig.validityHours, 'h')
-        .isSameOrBefore(dayjs());
+
+      // Convert signal.createdAt to UTC if it's not already
+      const signalCreatedAt = dayjs(signal.createdAt).utc();
+      const expirationTime = signalCreatedAt.add(
+        profitConfig.validityHours,
+        'h',
+      );
+      const isExpired = expirationTime.isSameOrBefore(now);
+
+      console.log('Signal check details:', {
+        signal,
+        createdAt: signalCreatedAt.format(),
+        expirationTime: expirationTime.format(),
+        currentTime: now.format(),
+        isExpired,
+        timezone: 'UTC',
+      });
+
       if (maxPossibleProfitPercent >= profitConfig.profit) {
         await this.updateSignalStatus(
           signal,

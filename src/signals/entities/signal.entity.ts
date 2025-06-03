@@ -1,10 +1,13 @@
 import {
+  BeforeInsert,
+  BeforeUpdate,
   Column,
   CreateDateColumn,
   Entity,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { dayjs } from '../../utils';
 
 @Entity('signals')
 export class Signal {
@@ -35,9 +38,20 @@ export class Signal {
   @Column()
   messageId: number;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamp with time zone' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ type: 'timestamp with time zone' })
   updatedAt: Date;
+
+  @BeforeInsert()
+  @BeforeUpdate()
+  convertToUTC() {
+    if (this.createdAt) {
+      this.createdAt = dayjs(this.createdAt).utc().toDate();
+    }
+    if (this.updatedAt) {
+      this.updatedAt = dayjs(this.updatedAt).utc().toDate();
+    }
+  }
 }
