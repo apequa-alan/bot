@@ -74,41 +74,7 @@ export class TradingBotService implements OnModuleInit {
       key: this.BYBIT_API_KEY,
       secret: this.BYBIT_API_SECRET,
     });
-
-    // Initialize with top volume coins
-    await this.initializeTopVolumeCoins();
     await this.startBot();
-  }
-
-  private async initializeTopVolumeCoins() {
-    try {
-      const newTopCoins = await this.bybitService.getTopVolumeCoins(
-        this.TOP_VOLUME_COINS_COUNT,
-      );
-
-      if (newTopCoins.length === 0) {
-        console.error(
-          'Не удалось получить новый список монет для отслеживания',
-        );
-        return;
-      }
-
-      // Create subscriptions for each top coin
-      for (const symbol of newTopCoins) {
-        await this.subscriptionsService.createOrUpdateSubscription(
-          this.channelId,
-          symbol,
-          this.INTERVAL,
-        );
-      }
-    } catch (error) {
-      console.error('Error initializing top volume coins:', error);
-      await this.telegramService.sendErrorNotification({
-        error,
-        context: 'Ошибка при инициализации топ монет',
-        userId: this.channelId,
-      });
-    }
   }
 
   private validateInterval(interval: string): KlineIntervalV3 {
@@ -600,7 +566,7 @@ export class TradingBotService implements OnModuleInit {
       );
 
       // Cleanup old signals (keep last 30 days)
-      await this.signalsService.cleanupOldSignals(30);
+      await this.signalsService.cleanupOldSignals(3);
     } catch (error) {
       await this.telegramService.sendErrorNotification({
         userId: this.channelId,

@@ -45,29 +45,42 @@ export class SignalsDatabaseService {
     );
   }
 
-  async getSignalStats(userId: string) {
-    const today = dayjs().startOf('day');
-    const tomorrow = today.add(1, 'day');
+  async getSignalStats(
+    userId: string,
+  ): Promise<{ totalSignals: number; profitableSignals: number }> {
+    try {
+      // Use UTC for consistent timezone handling
+      const today = dayjs().utc().startOf('day');
+      const tomorrow = today.add(1, 'day');
 
-    const signals = await this.signalsRepository.find({
-      where: {
-        userId,
-        createdAt: Between(today.toDate(), tomorrow.toDate()),
-      },
-    });
+      console.log('Fetching signal stats for period:', {
+        start: today.format(),
+        end: tomorrow.format(),
+        timezone: 'UTC',
+      });
 
-    const totalSignals = signals.length;
-    const profitableSignals = signals.filter(
-      (signal) => signal.status === 'success',
-    ).length;
+      const signals = await this.signalsRepository.find({
+        where: {
+          userId,
+          createdAt: Between(today.toDate(), tomorrow.toDate()),
+        },
+      });
 
-    return {
-      totalSignals,
-      profitableSignals,
-    };
+      const totalSignals = signals.length;
+      const profitableSignals = signals.filter(
+        (signal) => signal.status === 'success',
+      ).length;
+      return {
+        totalSignals,
+        profitableSignals,
+      };
+    } catch (error) {
+      console.error('Error getting signal stats:', error);
+      throw new Error(`Failed to get signal stats: ${error}`);
+    }
   }
 
-  async cleanupOldSignals(daysToKeep: number = 30): Promise<void> {
+  async cleanupOldSignals(daysToKeep: number = 3): Promise<void> {
     const cutoffDate = dayjs().subtract(daysToKeep, 'day').toDate();
     await this.signalsRepository.delete({
       createdAt: LessThan(cutoffDate),

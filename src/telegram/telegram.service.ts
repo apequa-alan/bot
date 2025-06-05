@@ -52,10 +52,6 @@ export class TelegramService implements OnModuleInit {
       await this.handleHelpCallback(ctx);
     });
 
-    this.bot.action('back_to_welcome', async (ctx) => {
-      await this.handleBackToWelcomeCallback(ctx);
-    });
-
     this.bot.command('subscriptions', async (ctx) => {
       await this.handleSubscriptionsCommand(ctx);
     });
@@ -133,37 +129,14 @@ export class TelegramService implements OnModuleInit {
     );
   }
 
-  private async handleBackToWelcomeCallback(ctx: Context): Promise<void> {
-    try {
-      await ctx.editMessageText(
-        '👋 Добро пожаловать в Trading Signals Bot!\n\n' +
-          'Я помогу вам получать торговые сигналы.',
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '📘 Команды', callback_data: 'show_help' }],
-            ],
-          },
-        },
-      );
-    } catch (error) {
-      console.error('Error handling back to welcome callback:', error);
-      await ctx.answerCbQuery('Произошла ошибка при возврате в главное меню');
-    }
-  }
-
   private async sendWelcomeMessage(ctx: Context): Promise<void> {
     try {
-      const inlineKeyboard = Markup.inlineKeyboard([
-        Markup.button.callback('📘 Команды', 'show_help'),
-      ]);
-
       await ctx.reply(
-        '👋 Добро пожаловать в Trading Signals Bot!\n\n' +
-          'Я помогу вам получать торговые сигналы.\n\n' +
+        '👋 Добро пожаловать в Macd Strategy Bot!\n\n' +
+          'Я являюсь частью экосистемы <a href="https://t.me/snap_trade">Snap Trade</a> \n\n' +
+          'Я помогу вам получать торговые сигналы по индикатору MACD (+ подтверждение по объемам + подтверждение с старших таймфреймов).\n\n' +
           'Используйте команду /help для просмотра списка команд.',
         {
-          ...inlineKeyboard,
           ...this.mainKeyboard,
         },
       );
@@ -551,6 +524,18 @@ export class TelegramService implements OnModuleInit {
     } catch (error) {
       console.error(`Failed to send direct message to ${userId}:`, error);
       throw error;
+    }
+  }
+
+  async deleteMessage(messageId: number, userId: string): Promise<void> {
+    try {
+      await this.bot.telegram.deleteMessage(userId, messageId);
+    } catch (error) {
+      console.error(
+        `Failed to delete message ${messageId} for user ${userId}:`,
+        error,
+      );
+      // Don't throw error to prevent blocking the signal update process
     }
   }
 }

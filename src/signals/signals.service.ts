@@ -72,6 +72,8 @@ export class SignalsService {
         signal.messageId,
         signal.userId,
       );
+    } else if (status === 'failure') {
+      await this.telegramService.deleteMessage(signal.messageId, signal.userId);
     }
   }
 
@@ -87,7 +89,7 @@ export class SignalsService {
     return this.signalsDb.getSignalStats(userId);
   }
 
-  async cleanupOldSignals(daysToKeep: number = 30): Promise<void> {
+  async cleanupOldSignals(daysToKeep: number = 3): Promise<void> {
     await this.signalsDb.cleanupOldSignals(daysToKeep);
   }
 
