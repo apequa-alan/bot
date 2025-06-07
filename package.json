@@ -6,7 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "nest build",
+    "build": "nest build && npm run sentry:sourcemaps",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -21,7 +21,8 @@
     "typeorm": "npx ts-node -P ./tsconfig.json -r tsconfig-paths/register ./node_modules/typeorm/cli.js -d db/data-source.ts",
     "db:drop": "npm run typeorm schema:drop",
     "db:create": "npm run typeorm migration:generate",
-    "db:migrate": "npm run typeorm migration:run"
+    "db:migrate": "npm run typeorm migration:run",
+    "sentry:sourcemaps": "sentry-cli sourcemaps inject --org snap-b3 --project node-nestjs ./out && sentry-cli sourcemaps upload --org snap-b3 --project node-nestjs ./out"
   },
   "dependencies": {
     "@nestjs/common": "10.4.15",
@@ -31,6 +32,8 @@
     "@nestjs/platform-express": "^10.0.0",
     "@nestjs/schedule": "^5.0.1",
     "@nestjs/typeorm": "10.0.2",
+    "@sentry/cli": "^2.46.0",
+    "@sentry/nestjs": "^9.27.0",
     "@supabase/supabase-js": "^2.49.9",
     "@types/sqlite3": "^5.1.0",
     "bybit-api": "^4.1.1",
