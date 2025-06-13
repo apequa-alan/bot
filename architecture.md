@@ -105,6 +105,21 @@ The system is a trading bot that generates and manages trading signals based on 
 
 ## Configuration
 
+### Environment Configuration
+
+The application uses a flexible environment configuration system:
+
+- `.env.development.local` - Local development settings (not committed to git)
+- `.env.development` - Default development settings
+- `.env.production` - Production settings
+- `.env.test` - Test settings
+
+The system will:
+
+1. First try to load the `.local` variant of the environment file
+2. Fall back to the regular environment file if `.local` doesn't exist
+3. Use `NODE_ENV` to determine which environment to load
+
 ### Timeframe Configuration
 ```typescript
 {
@@ -123,10 +138,38 @@ The system is a trading bot that generates and manages trading signals based on 
 }
 ```
 
+## Message Formatting
+
+### Telegram Messages
+
+- HTML formatting is supported for messages
+- Links are rendered as clickable elements
+- Message options include:
+    - `parse_mode: 'HTML'` for HTML formatting
+    - Custom keyboards for user interaction
+    - Inline keyboards for dynamic actions
+
+### Message Types
+
+1. Welcome Messages
+    - HTML-formatted text
+    - Clickable links
+    - Main keyboard for navigation
+
+2. Signal Messages
+    - Formatted trading signals
+    - Entry/exit information
+    - Profit/loss calculations
+
+3. Error Messages
+    - Error notifications
+    - Stack traces for debugging
+    - User-friendly error descriptions
+
 ## Dependencies
 - NestJS: Framework
 - TypeORM: Database ORM
-- SQLite: Database
+- PostgreSQL: Database
 - Bybit API: Market data
 - Telegram Bot API: User notifications
 - WebSocket: Real-time data streaming
@@ -150,7 +193,12 @@ The system is a trading bot that generates and manages trading signals based on 
 - TypeScript - For type-safe development
 
 ### Database
-- SQLite (signals.db) - For storing trading signals and related data
+
+- PostgreSQL - For storing trading signals and related data
+    - Uses TypeORM for database operations
+    - SSL connection enabled
+    - Migrations for schema management
+    - Environment-based configuration via DATABASE_URL
 
 ### External Services
 - Bybit API - For trading operations

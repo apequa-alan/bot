@@ -137,6 +137,7 @@ export class TelegramService implements OnModuleInit {
           'Я помогу вам получать торговые сигналы по индикатору MACD (+ подтверждение по объемам + подтверждение с старших таймфреймов).\n\n' +
           'Используйте команду /help для просмотра списка команд.',
         {
+          parse_mode: 'HTML',
           ...this.mainKeyboard,
         },
       );

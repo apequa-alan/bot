@@ -1,9 +1,9 @@
-import { config } from 'dotenv';
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { Signal } from '../src/signals/entities/signal.entity';
 import { Subscription } from '../src/trading-bot/entities/subscription.entity';
+import { loadEnvironmentFile } from '../src/config/configuration';
 
-config();
+loadEnvironmentFile();
 
 const dataSourceOptions: DataSourceOptions = {
   type: 'postgres',
