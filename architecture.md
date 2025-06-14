@@ -1,11 +1,13 @@
 # Trading Bot Architecture
 
 ## Overview
+
 The system is a trading bot that generates and manages trading signals based on MACD indicators and volume analysis. It integrates with Bybit for market data and Telegram for user notifications.
 
 ## Core Components
 
 ### Trading Bot Module
+
 - **TradingBotService**: Main service that handles market data processing and signal generation
   - Monitors top volume coins
   - Processes WebSocket data from Bybit
@@ -13,13 +15,16 @@ The system is a trading bot that generates and manages trading signals based on 
   - Manages signal lifecycle
 
 ### Signals Module
+
 - **SignalsService**: Manages signal lifecycle and updates
+
   - Creates new signals
   - Updates signal status
   - Tracks active signals
   - Manages signal statistics
 
 - **SignalsDatabaseService**: Handles signal persistence
+
   - Saves signals to database
   - Updates signal status
   - Retrieves active signals
@@ -31,13 +36,16 @@ The system is a trading bot that generates and manages trading signals based on 
   - Generates performance reports
 
 ### Telegram Module
+
 - **TelegramService**: Core Telegram integration
-  - Sends notifications
+
+    - Sends notifications
   - Handles user interactions
   - Manages message formatting
 
 - **SignalBroadcastService**: Handles signal broadcasting
-  - Broadcasts signals to channels
+
+    - Broadcasts signals to channels
   - Sends personalized signals to subscribers
   - Formats signal messages
 
@@ -47,6 +55,7 @@ The system is a trading bot that generates and manages trading signals based on 
   - Formats update messages
 
 ### Subscriptions Module
+
 - **SubscriptionsService**: Manages user subscriptions
   - Handles user subscriptions to symbols
   - Manages custom take profit levels
@@ -55,13 +64,15 @@ The system is a trading bot that generates and manages trading signals based on 
 ## Data Flow
 
 1. **Signal Generation**
-   - TradingBotService receives market data via WebSocket
+
+    - TradingBotService receives market data via WebSocket
    - Analyzes MACD and volume indicators
    - Generates signals when conditions are met
    - Creates Signal entity with entry details
 
 2. **Signal Broadcasting**
-   - Signal is saved to database
+
+    - Signal is saved to database
    - Subscribers are found for the symbol/interval
    - Personalized messages are sent to each subscriber
    - Channel broadcast is sent if configured
@@ -75,6 +86,7 @@ The system is a trading bot that generates and manages trading signals based on 
 ## Database Schema
 
 ### Signal Entity
+
 - id: string (UUID)
 - symbol: string
 - interval: string
@@ -96,6 +108,7 @@ The system is a trading bot that generates and manages trading signals based on 
 - validityHours: number
 
 ### Subscription Entity
+
 - id: string (UUID)
 - userId: string
 - symbol: string
@@ -121,6 +134,7 @@ The system will:
 3. Use `NODE_ENV` to determine which environment to load
 
 ### Timeframe Configuration
+
 ```typescript
 {
   '1': { profit: 0.6, validityHours: 1 },
@@ -152,11 +166,13 @@ The system will:
 ### Message Types
 
 1. Welcome Messages
+
     - HTML-formatted text
     - Clickable links
     - Main keyboard for navigation
 
 2. Signal Messages
+
     - Formatted trading signals
     - Entry/exit information
     - Profit/loss calculations
@@ -167,6 +183,7 @@ The system will:
     - User-friendly error descriptions
 
 ## Dependencies
+
 - NestJS: Framework
 - TypeORM: Database ORM
 - PostgreSQL: Database
@@ -175,12 +192,14 @@ The system will:
 - WebSocket: Real-time data streaming
 
 ## Error Handling
+
 - WebSocket connection errors
 - Signal generation failures
 - Message sending failures
 - Database operation errors
 
 ## Monitoring
+
 - Daily signal statistics
 - Success rate tracking
 - Profit/loss metrics
@@ -189,6 +208,7 @@ The system will:
 ## Technical Stack
 
 ### Backend Framework
+
 - NestJS - A progressive Node.js framework
 - TypeScript - For type-safe development
 
@@ -201,11 +221,14 @@ The system will:
     - Environment-based configuration via DATABASE_URL
 
 ### External Services
+
 - Bybit API - For trading operations
 - Telegram Bot API - For notifications and commands
 
 ### Configuration
+
 Environment variables (`.env`):
+
 - Trading Parameters:
   - FAST_PERIOD
   - SLOW_PERIOD
@@ -219,6 +242,7 @@ Environment variables (`.env`):
   - TELEGRAM_CHANNEL_ID
 
 ## Project Structure
+
 ```
 ├── src/
 │   ├── trading-bot/     # Trading strategy and execution
@@ -241,11 +265,13 @@ Environment variables (`.env`):
 ## Development Guidelines
 
 ### Code Organization
+
 - Each module is self-contained with its own controllers, services, and DTOs
 - Shared functionality is placed in the utils module
 - Clear separation between business logic and external service integration
 
 ### Best Practices
+
 - TypeScript strict mode enabled
 - Modular architecture following NestJS conventions
 - Environment-based configuration
@@ -253,13 +279,16 @@ Environment variables (`.env`):
 - Database migrations and versioning
 
 ### Testing
+
 - Unit tests for individual components
 - Integration tests for module interactions
 - End-to-end tests for critical flows
 
 ## Deployment
+
 The application can be deployed as a Node.js service, with the following considerations:
+
 - Environment variables must be properly configured
 - Database migrations should be run
 - Proper error handling and monitoring should be in place
-- Regular backups of the database should be maintained 
+- Regular backups of the database should be maintained

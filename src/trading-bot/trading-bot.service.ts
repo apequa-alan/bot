@@ -18,6 +18,9 @@ import {
 import dayjs from '../utils/dayjs';
 
 const limit = 300;
+const VALID_INTERVALS: KlineIntervalV3[] = Object.keys(
+  SUPPORTED_INTERVALS,
+) as KlineIntervalV3[];
 
 @Injectable()
 export class TradingBotService implements OnModuleInit {
@@ -27,10 +30,6 @@ export class TradingBotService implements OnModuleInit {
   private activeSubscriptions: Set<string> = new Set();
   private readonly TOP_VOLUME_COINS_COUNT = 10;
   private readonly ONE_HISTOGRAM_DIRECTION_CANDLES = 3;
-
-  private readonly VALID_INTERVALS: KlineIntervalV3[] = Object.keys(
-    SUPPORTED_INTERVALS,
-  ) as KlineIntervalV3[];
 
   private readonly BYBIT_API_KEY: string;
   private readonly BYBIT_API_SECRET: string;
@@ -79,9 +78,9 @@ export class TradingBotService implements OnModuleInit {
 
   private validateInterval(interval: string): KlineIntervalV3 {
     // Check if interval is in valid intervals
-    if (!this.VALID_INTERVALS.includes(interval as KlineIntervalV3)) {
+    if (!VALID_INTERVALS.includes(interval as KlineIntervalV3)) {
       throw new Error(
-        `Invalid interval: ${interval}. Valid intervals are: ${this.VALID_INTERVALS.join(', ')}`,
+        `Invalid interval: ${interval}. Valid intervals are: ${VALID_INTERVALS.join(', ')}`,
       );
     }
 
@@ -111,6 +110,7 @@ export class TradingBotService implements OnModuleInit {
       // Unsubscribe from pairs that are no longer needed
       for (const pair of pairsToUnsubscribe) {
         const [symbol, interval] = pair.split('-');
+
         const wsKlineTopicEvent = `kline.${interval}.${symbol}`;
         this.ws.unsubscribeV5(wsKlineTopicEvent, 'linear');
         this.activeSubscriptions.delete(pair);
@@ -283,6 +283,7 @@ export class TradingBotService implements OnModuleInit {
           // Check for profit on active signals using high and low prices
           await this.signalsService.checkSignalProfit({
             symbol,
+            interval,
             currentPrice: close,
             highPrice: high,
             lowPrice: low,

@@ -81,8 +81,11 @@ export class SignalsService {
     return this.signalsDb.getActiveSignals(userId);
   }
 
-  async getActiveSignalsBySymbol(symbol: string): Promise<Signal[]> {
-    return this.signalsDb.getActiveSignalsBySymbol(symbol);
+  async getActiveSignalsBySymbolAndInterval(
+    symbol: string,
+    interval: string,
+  ): Promise<Signal[]> {
+    return this.signalsDb.getActiveSignalsBySymbolAndInterval(symbol, interval);
   }
 
   async getSignalStats(userId: string) {
@@ -95,18 +98,23 @@ export class SignalsService {
 
   async checkSignalProfit({
     symbol,
+    interval,
     currentPrice,
     highPrice,
     lowPrice,
     profitConfig,
   }: {
     symbol: string;
+    interval: string;
     currentPrice: number;
     highPrice: number;
     lowPrice: number;
     profitConfig: { profit: number; validityHours: number };
   }): Promise<void> {
-    const symbolSignals = await this.getActiveSignalsBySymbol(symbol);
+    const symbolSignals = await this.getActiveSignalsBySymbolAndInterval(
+      symbol,
+      interval,
+    );
 
     if (!symbolSignals.length) return;
 

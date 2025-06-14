@@ -2,6 +2,7 @@ import { forwardRef, Inject, Injectable } from '@nestjs/common';
 import { Subscription } from '../entities/subscription.entity';
 import { SubscriptionsRepository } from './subscriptions.repository';
 import { TradingBotService } from '../trading-bot.service';
+import { UsersService } from '../../users/users.service';
 
 @Injectable()
 export class SubscriptionsService {
@@ -9,6 +10,7 @@ export class SubscriptionsService {
     private readonly repository: SubscriptionsRepository,
     @Inject(forwardRef(() => TradingBotService))
     private readonly tradingBotService: TradingBotService,
+    private readonly usersService: UsersService,
   ) {}
 
   async createOrUpdateSubscription(
@@ -17,6 +19,17 @@ export class SubscriptionsService {
     interval: string,
     takeProfit?: number,
   ): Promise<Subscription> {
+    const user = await this.usersService.createIfNotExists(userId);
+
+    const activeSubscriptions = await this.repository.find({
+      userId,
+      active: true,
+    });
+
+    if (activeSubscriptions.length >= user.subscriptionLimit) {
+      throw new Error('Subscription limit reached');
+    }
+
     const existingSubscription = await this.repository.findOne(
       userId,
       symbol,

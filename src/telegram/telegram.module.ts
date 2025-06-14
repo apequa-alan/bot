@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TelegrafModule } from 'nestjs-telegraf';
 import { TelegramService } from './telegram.service';
 import { SubscriptionsModule } from '../trading-bot/subscriptions/subscriptions.module';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { SubscriptionsModule } from '../trading-bot/subscriptions/subscriptions.
       inject: [ConfigService],
     }),
     SubscriptionsModule,
+    UsersModule,
   ],
   providers: [TelegramService],
   exports: [TelegramService],

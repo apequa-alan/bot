@@ -1,72 +1,177 @@
-Цель — эффективно сопоставить сигнал с подписками и отправить его нужным пользователям, избегая дубликатов, ошибок и обеспечивая масштабируемость.
+## 🔧 PHASE 1 — Core Subscription Infrastructure
 
-✅ PHASE 4: Signal-to-User Matching and Delivery
-Отправка сигнала только тем пользователям, которые подписаны на соответствующий symbol + interval.
- Архитектура: Обновлённый поток
-text
-Копировать
-Редактировать
-[ TradingBotService ]
-    └─ onSignalGenerated(signal) ──▶ broadcastSignal(signal)
+---
 
-[ SignalMonitorService ]
-    └─ checksPriceUpdate() ──▶ updateSignalStatus(signal)
-                              └─▶ notifyUsers(signalUpdate)
-🔁 Интеграция подписок — пошаговый план
-Step 1: Встроить broadcastSignal(signal) в общую логику генерации сигнала
-Start: Сигналы создаются, но рассылка только общая или отсутствует.
+### ✅ **Task 1: Add Subscription Fields to User Entity**
 
-End: При создании сигнала вызывается broadcastSignal(signal).
+* **Start:** Update `User` entity.
+* **End:** `plan`, `subscriptionLimit`, `subscriptionExpiresAt` columns exist.
+* **Details:**
 
-В TradingBotService:
+  * `plan: enum('free', 'pro', 'premium')`
+  * `subscriptionLimit: number`
+  * `subscriptionExpiresAt: Date | null`
+  * Add migration script.
 
-ts
-Копировать
-Редактировать
-await this.signalsService.create(signal); // сохраняем сигнал
-await this.signalBroadcastService.broadcastSignal(signal); // отправляем всем подписанным
-Step 2: В broadcastSignal учесть персональный takeProfit
-Уже реализовано ранее, просто подтвердим: sub.takeProfit ?? defaultProfit.
+---
 
-Step 3: Встроить подписки в SignalMonitorService (отслеживание TP)
-Когда происходит обновление цены — проверяется: был ли достигнут TP? Если да → отправить обновление только тем, кто подписан.
+### ✅ **Task 2: Initialize New Users with Free Plan**
 
-ts
-Копировать
-Редактировать
-const activeSignals = await this.signalsService.getActiveSignals();
+* **Start:** When a user sends `/start`, check/create user.
+* **End:** User gets `free` plan with `3` subscriptionLimit.
+* **Details:**
 
-for (const signal of activeSignals) {
-  const price = getCurrentPrice(signal.symbol);
+  * Implement logic in `UsersService.createIfNotExists()`.
+  * Default values from config (e.g., `PLAN_CONFIG.free`).
 
-  const { profit: defaultProfit } = getDefaultSignalConfig(signal.interval);
-  const subscribers = await this.subscriptionsService.getActiveSubscribersForSymbolInterval(signal.symbol, signal.interval);
+---
 
-  for (const sub of subscribers) {
-    const profitPercent = sub.takeProfit ?? defaultProfit;
-    const targetPrice = calculateTakeProfit(signal.entryPrice, profitPercent, signal.type);
+### ✅ **Task 3: Enforce Subscription Limit When Creating a Subscription**
 
-    if (signal.type === 'long' && price >= targetPrice ||
-        signal.type === 'short' && price <= targetPrice) {
-      await this.signalsService.markAsSuccess(signal.id);
+* **Start:** In `SubscriptionsService.create()`, add user limit check.
+* **End:** Reject if user has max active subscriptions.
+* **Details:**
 
-      const message = `✅ Signal hit take profit!\nSymbol: ${signal.symbol}\nEntry: ${signal.entryPrice}\nTP: ${targetPrice}`;
-      await this.telegramService.sendMessageToUser(sub.userId, message);
-    }
-  }
+  * Use `count()` to get active subscriptions.
+  * Return error if over limit (can trigger UX response).
+
+---
+
+## 🛒 PHASE 2 — Billing via Telegram Stars
+
+---
+
+### ✅ **Task 4: Add /buy Command to Show Plan Options**
+
+* **Start:** Create Telegram `/buy` command handler.
+* **End:** User sees buttons: Pro (150⭐), Premium (750⭐).
+* **Details:**
+
+  * `callback_data: buy_pro`, `buy_premium`.
+
+---
+
+### ✅ **Task 5: Implement Invoice Generation for Stars**
+
+* **Start:** Handle `buy_pro` and `buy_premium` callbacks.
+* **End:** Telegram sends payment request (invoice).
+* **Details:**
+
+  * Use `sendInvoice()` with Stars-based pricing.
+  * Set `invoice_payload = 'pro'` or `'premium'`.
+  * Add refund functionality:
+    * Allow refunds within 7 days of payment
+    * Add refund button in payment confirmation message
+    * Handle refund process and update user's plan back to free
+    * Update subscription limits and expiration date
+
+---
+
+### ✅ **Task 6: Handle successful_payment Event and Upgrade Plan**
+
+* **Start:** On `successful_payment`, update user's plan.
+* **End:** User's plan, limit, and expiry are updated.
+* **Details:**
+
+  * Use PLAN_CONFIG to set new values.
+  * Set `subscriptionExpiresAt = now + 30 days`.
+  * Update subscription limits based on plan.
+  * Send confirmation message with:
+    * New plan details
+    * Updated subscription limit
+    * Expiration date
+    * Refund information (7-day policy)
+  * Add refund button to confirmation message
+  * Handle refund requests within 7 days
+
+---
+
+### ✅ **Task 7: Send Confirmation Message After Purchase**
+
+* **Start:** After plan update.
+* **End:** User receives a success message with expiry date.
+* **Details:**
+
+  * `✅ Premium plan activated until DD.MM.YYYY`.
+
+---
+
+## 🧠 PHASE 3 — UX Feedback & Automation
+
+---
+
+### ✅ **Task 8: Add /status Command to Show Plan and Limits**
+
+* **Start:** Implement `/status` command.
+* **End:** User sees:
+
+  * Plan name
+  * Subscription limit
+  * Subscriptions used
+  * Expiration date (if any)
+
+---
+
+### ✅ **Task 9: Auto-respond on Subscription Limit Exceeding**
+
+* **Start:** When user hits max limit (from Task 3).
+* **End:** Send message:
+
+  * "You've reached your limit. Upgrade to Pro or Premium."
+  * Include inline buttons for `/buy`.
+
+---
+
+### ✅ **Task 10: Cron Job to Downgrade Expired Subscriptions**
+
+* **Start:** Create scheduled job that runs daily.
+* **End:** Users with expired `pro`/`premium` plans get downgraded to `free`.
+* **Details:**
+
+  * Set plan = `'free'`
+  * Limit = 3
+  * `subscriptionExpiresAt = null`
+
+---
+
+## 📐 PHASE 4 — Configuration & Constants
+
+---
+
+### ✅ **Task 11: Centralize Plan Metadata in Config**
+
+* **Start:** Create constant `PLAN_CONFIG`.
+* **End:** All limits/prices/durations are read from one place.
+
+```ts
+export const PLAN_CONFIG = {
+  free:    { limit: 3,    priceStars: 0,   durationDays: Infinity },
+  pro:     { limit: 30,   priceStars: 150, durationDays: 30 },
+  premium: { limit: 300,  priceStars: 750, durationDays: 30 }
 }
-Step 4: Не дублировать обновление сигналов
-Добавь защиту от повторной отправки, например: поле notified = true.
+```
 
-После отправки обновляй notified = true в сигнале.
+---
 
-Проверять expiration
-В SignalMonitorService добавь:
+## 🧪 Final Testing Tasks
 
-ts
-Копировать
-Редактировать
-if (Date.now() > signal.exitTimestamp) {
-  await this.signalsService.markAsFailure(signal.id);
-  // optionally notify users if you want
-}
+---
+
+### ✅ **Task 13: Test Each Plan Path End-to-End**
+
+* Test:
+
+  * User on `free` plan hitting 3-sub limit
+  * Upgrading to `pro` via Stars → 30-sub limit
+  * Upgrading to `premium` via Stars → 300-sub limit
+
+---
+
+### ✅ **Task 14: Test Downgrade on Expiry**
+
+* Set `subscriptionExpiresAt` to yesterday → run Cron.
+* Ensure user is downgraded.
+
+---
+
+Let me know if you want this as a markdown `.md` file or a JSON list to feed directly into a task manager.

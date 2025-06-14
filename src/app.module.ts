@@ -12,6 +12,9 @@ import { BybitModule } from './bybit/bybit.module';
 import { SignalsModule } from './signals/signals.module';
 import { SubscriptionsModule } from './trading-bot/subscriptions/subscriptions.module';
 import { Signal } from './signals/entities/signal.entity';
+import { User } from './users/entities/user.entity';
+import { Transaction } from './users/entities/transaction.entity';
+import { UsersModule } from './users/users.module';
 import { Subscription } from './trading-bot/entities/subscription.entity';
 import { configuration } from './config/configuration';
 
@@ -25,7 +28,7 @@ import { configuration } from './config/configuration';
     TypeOrmModule.forRoot({
       type: 'postgres',
       url: process.env.DATABASE_URL,
-      entities: [Signal, Subscription],
+      entities: [Signal, Subscription, User, Transaction],
       ssl: {
         rejectUnauthorized: false,
       },
@@ -38,6 +41,7 @@ import { configuration } from './config/configuration';
     BybitModule,
     SignalsModule,
     SubscriptionsModule,
+    UsersModule,
   ],
   providers: [
     {
